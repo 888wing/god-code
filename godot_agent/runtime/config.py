@@ -1,3 +1,4 @@
+# godot_agent/runtime/config.py
 from __future__ import annotations
 
 import json
@@ -10,7 +11,7 @@ from pydantic import BaseModel
 class AgentConfig(BaseModel):
     api_key: str = ""
     base_url: str = "https://api.openai.com/v1"
-    model: str = "gpt-4o"
+    model: str = "gpt-5.4"
     oauth_token: str | None = None
     max_turns: int = 20
     max_tokens: int = 4096
@@ -20,7 +21,7 @@ class AgentConfig(BaseModel):
     session_dir: str = ".agent_sessions"
 
 
-def load_config(path: Path | None = None) -> AgentConfig:
+def load_config(path: Path | None = None, use_codex: bool = False) -> AgentConfig:
     data: dict = {}
     if path and path.exists():
         data = json.loads(path.read_text())
@@ -36,6 +37,15 @@ def load_config(path: Path | None = None) -> AgentConfig:
         val = os.environ.get(env_key)
         if val is not None:
             setattr(config, field_name, val)
+
+    # Auto-detect OAuth token if no API key set
+    if not config.api_key and not config.oauth_token:
+        from godot_agent.runtime.oauth import load_stored_token, load_codex_auth
+        # Try god-code's own token store first, then Codex CLI fallback
+        token = load_stored_token() or load_codex_auth()
+        if token:
+            config.oauth_token = token
+
     return config
 
 
