@@ -13,6 +13,7 @@ from godot_agent.runtime.config import AgentConfig, default_config_path, load_co
 from godot_agent.runtime.engine import ConversationEngine
 from godot_agent.runtime.session import save_session
 from godot_agent.tools.file_ops import EditFileTool, ReadFileTool, WriteFileTool
+from godot_agent.tools.git import GitTool
 from godot_agent.tools.godot_cli import RunGodotTool
 from godot_agent.tools.registry import ToolRegistry
 from godot_agent.tools.screenshot import ScreenshotTool
@@ -28,6 +29,7 @@ def build_registry() -> ToolRegistry:
         EditFileTool,
         GrepTool,
         GlobTool,
+        GitTool,
         RunGodotTool,
         ScreenshotTool,
     ]:
