@@ -211,7 +211,7 @@ God Code executes tools on your local machine. The LLM decides which tools to ca
 
 ## MCP Server (for Claude Code / Codex / AI Agents)
 
-God Code can run as an MCP (Model Context Protocol) server, exposing 12 Godot tools directly to AI agents. **No LLM middleman, zero token cost** — tools run locally.
+God Code can run as an MCP (Model Context Protocol) server, exposing 20 Godot tools directly to AI agents. **No LLM middleman, zero token cost** — tools run locally.
 
 ### Install
 
