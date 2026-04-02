@@ -7,9 +7,17 @@ from godot_agent.cli import (
     _apply_provider_preset,
     _cd_argument,
     _command_argument,
+    _effort_menu_options,
+    _format_setting_display_value,
     _is_multiline_terminator,
+    _main_menu_options,
+    _mode_menu_options,
+    _model_menu_options,
     _multiline_initial_fragment,
     _normalize_reasoning_effort,
+    _provider_menu_options,
+    _settings_menu_options,
+    _setting_value_menu_options,
     _set_arguments,
     _starts_multiline_input,
     _sync_provider_from_model,
@@ -30,6 +38,80 @@ def test_apply_provider_preset_updates_provider_defaults():
     assert cfg.provider == "anthropic"
     assert cfg.base_url == "https://api.anthropic.com/v1"
     assert cfg.model == "claude-sonnet-4.6"
+
+
+def test_main_menu_exposes_interactive_secondary_commands():
+    values = {option.value for option in _main_menu_options()}
+    assert {"mode", "provider", "model", "effort", "resume", "cd", "set"}.issubset(values)
+
+
+def test_settings_menu_covers_all_interactive_config_fields():
+    values = {option.value for option in _settings_menu_options()}
+    assert {
+        "api_key",
+        "provider",
+        "base_url",
+        "model",
+        "reasoning_effort",
+        "oauth_token",
+        "max_turns",
+        "max_tokens",
+        "temperature",
+        "godot_path",
+        "language",
+        "verbosity",
+        "mode",
+        "auto_validate",
+        "auto_commit",
+        "screenshot_max_iterations",
+        "token_budget",
+        "safety",
+        "streaming",
+        "autosave_session",
+        "extra_prompt",
+        "session_dir",
+    }.issubset(values)
+
+
+def test_mode_provider_and_effort_menu_options_are_populated():
+    assert {option.value for option in _mode_menu_options()} == {"apply", "plan", "explain", "review", "fix"}
+    assert "openai" in {option.value for option in _provider_menu_options()}
+    assert "high" in {option.value for option in _effort_menu_options()}
+
+
+def test_model_menu_includes_custom_entry():
+    cfg = AgentConfig(provider="openai", base_url="https://api.openai.com/v1", model="gpt-5.4")
+    values = {option.value for option in _model_menu_options(cfg)}
+    assert "__custom__" in values
+    assert "gpt-5.4" in values
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("mode", {"apply", "plan", "explain", "review", "fix"}),
+        ("language", {"en", "zh-TW", "ja"}),
+        ("verbosity", {"concise", "normal", "detailed"}),
+        ("safety", {"strict", "normal", "permissive"}),
+        ("streaming", {"true", "false"}),
+    ],
+)
+def test_setting_value_menu_options_cover_fixed_choice_settings(key: str, expected: set[str]):
+    options = _setting_value_menu_options(key)
+    assert options is not None
+    assert expected.issubset({option.value for option in options})
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "expected"),
+    [
+        ("api_key", "sk-1234567890", "sk-1...7890"),
+        ("oauth_token", "abcd1234", "********"),
+        ("model", "gpt-5.4", "gpt-5.4"),
+    ],
+)
+def test_format_setting_display_value_masks_secrets(key: str, value: str, expected: str):
+    assert _format_setting_display_value(key, value) == expected
 
 
 def test_sync_provider_from_model_updates_base_url_when_switching_family():

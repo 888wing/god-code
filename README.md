@@ -139,7 +139,12 @@ All fields can be overridden with `GODOT_AGENT_` prefixed environment variables.
 
 Interactive chat supports:
 
-- `/mode [apply|plan|explain|review|fix]`
+- `/mode [name]` — interactive mode menu (apply/plan/explain/review/fix)
+- `/provider [name]` — interactive provider switcher with menu
+- `/model [name]` — interactive model selection menu
+- `/effort [level]` — reasoning effort (auto/minimal/low/medium/high/xhigh)
+- `/settings` — interactive settings editor with menus for each option
+- `/set <key> <value>` — quick inline setting change
 - `/sessions` and `/resume [session-id]`
 - `/new` to start a fresh session
 - `/workspace` to re-render the session snapshot

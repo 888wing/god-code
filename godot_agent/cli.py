@@ -53,6 +53,7 @@ from godot_agent.tools.search import GlobTool, GrepTool
 from godot_agent.tools.shell import RunShellTool
 from godot_agent.tools.memory_tool import ReadDesignMemoryTool, UpdateDesignMemoryTool
 from godot_agent.tools.script_tools import EditScriptTool, LintScriptTool, ReadScriptTool
+from godot_agent.tui.input_handler import MenuOption, resolve_menu_choice
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +147,257 @@ def _multiline_initial_fragment(value: str) -> str:
 
 def _is_multiline_terminator(value: str | None) -> bool:
     return value is None or value.strip() == '"""'
+
+
+def _mode_menu_options() -> list[MenuOption]:
+    return [
+        MenuOption(name, get_mode_spec(name).label, get_mode_spec(name).description)
+        for name in ("apply", "plan", "explain", "review", "fix")
+    ]
+
+
+def _provider_menu_options() -> list[MenuOption]:
+    return [
+        MenuOption(
+            provider,
+            preset.name,
+            preset.model or "Custom API configuration",
+            aliases=(provider,),
+        )
+        for provider, preset in PROVIDER_PRESETS.items()
+    ]
+
+
+def _effort_menu_options() -> list[MenuOption]:
+    descriptions = {
+        "auto": "Let the provider decide.",
+        "minimal": "Fastest possible reasoning.",
+        "low": "Light reasoning for straightforward work.",
+        "medium": "Balanced depth and latency.",
+        "high": "Deeper reasoning for harder tasks.",
+        "xhigh": "Maximum reasoning depth.",
+    }
+    return [
+        MenuOption(level, level, descriptions.get(level, ""))
+        for level in REASONING_EFFORT_LEVELS
+    ]
+
+
+def _model_menu_options(cfg: AgentConfig) -> list[MenuOption]:
+    options: list[MenuOption] = []
+    seen: set[str] = set()
+
+    def add(value: str, label: str, description: str, aliases: tuple[str, ...] = ()) -> None:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        options.append(MenuOption(normalized, label, description, aliases=aliases))
+
+    add(cfg.model, f"{cfg.model}", "Current model", aliases=("current",))
+    preset = PROVIDER_PRESETS.get(cfg.provider)
+    if preset and preset.model and preset.model != cfg.model:
+        add(preset.model, f"{preset.model}", f"{preset.name} default model", aliases=("default",))
+    add("__custom__", "Custom model...", "Type any model identifier manually", aliases=("custom", "manual"))
+    return options
+
+
+def _settings_menu_options() -> list[MenuOption]:
+    descriptions = {
+        "api_key": "Update the provider API key (hidden input).",
+        "provider": "Switch provider family and default base URL/model.",
+        "base_url": "Edit the API base URL manually.",
+        "model": "Switch the active model name.",
+        "reasoning_effort": "Change reasoning depth.",
+        "oauth_token": "Update the OAuth token (hidden input).",
+        "max_turns": "Maximum tool-calling turns per request.",
+        "max_tokens": "Maximum output tokens per request.",
+        "temperature": "Sampling temperature for supported providers.",
+        "godot_path": "Path to the Godot executable.",
+        "language": "Preferred response language.",
+        "verbosity": "Response detail level.",
+        "mode": "Change interaction mode.",
+        "auto_validate": "Toggle post-change validation.",
+        "auto_commit": "Toggle commit suggestion after edits.",
+        "screenshot_max_iterations": "Max screenshot stabilization attempts.",
+        "token_budget": "Session token budget, 0 = unlimited.",
+        "safety": "Shell safety policy.",
+        "streaming": "Toggle streamed assistant output.",
+        "autosave_session": "Persist chat state after each turn.",
+        "extra_prompt": "Append custom system instructions.",
+        "session_dir": "Directory used to store chat sessions.",
+    }
+    return [
+        MenuOption(key, key, descriptions.get(key, ""))
+        for key in (
+            "api_key", "provider", "base_url", "model", "reasoning_effort", "oauth_token",
+            "max_turns", "max_tokens", "temperature", "godot_path",
+            "language", "verbosity", "mode", "auto_validate", "auto_commit",
+            "screenshot_max_iterations", "token_budget", "safety", "streaming",
+            "autosave_session", "extra_prompt", "session_dir",
+        )
+    ]
+
+
+def _boolean_menu_options() -> list[MenuOption]:
+    return [
+        MenuOption("true", "Enable", "Set the option to true.", aliases=("yes", "on", "1")),
+        MenuOption("false", "Disable", "Set the option to false.", aliases=("no", "off", "0")),
+    ]
+
+
+def _language_menu_options() -> list[MenuOption]:
+    return [
+        MenuOption("en", "English", "Respond in English.", aliases=("english",)),
+        MenuOption("zh-TW", "Traditional Chinese", "Respond in Traditional Chinese.", aliases=("zh", "zh-tw", "traditional chinese")),
+        MenuOption("ja", "Japanese", "Respond in Japanese.", aliases=("jp", "japanese")),
+    ]
+
+
+def _verbosity_menu_options() -> list[MenuOption]:
+    return [
+        MenuOption("concise", "Concise", "Short, high-signal responses."),
+        MenuOption("normal", "Normal", "Balanced detail."),
+        MenuOption("detailed", "Detailed", "More explanation and context."),
+    ]
+
+
+def _safety_menu_options() -> list[MenuOption]:
+    return [
+        MenuOption("strict", "Strict", "Most conservative shell policy."),
+        MenuOption("normal", "Normal", "Balanced shell policy."),
+        MenuOption("permissive", "Permissive", "Looser shell policy."),
+    ]
+
+
+def _setting_value_menu_options(key: str) -> list[MenuOption] | None:
+    if key == "mode":
+        return _mode_menu_options()
+    if key == "provider":
+        return _provider_menu_options()
+    if key == "reasoning_effort":
+        return _effort_menu_options()
+    if key in {"auto_validate", "auto_commit", "streaming", "autosave_session"}:
+        return _boolean_menu_options()
+    if key == "language":
+        return _language_menu_options()
+    if key == "verbosity":
+        return _verbosity_menu_options()
+    if key == "safety":
+        return _safety_menu_options()
+    return None
+
+
+_SECRET_SETTING_KEYS = {"api_key", "oauth_token"}
+_MULTILINE_SETTING_KEYS = {"extra_prompt"}
+
+
+def _session_menu_options(records) -> list[MenuOption]:
+    options: list[MenuOption] = []
+    for record in records:
+        subtitle = record.project_name or record.project_path or "-"
+        description = f"{record.mode or '-'} | {subtitle} | {record.title or 'Untitled session'}"
+        options.append(MenuOption(record.session_id, record.session_id, description, aliases=("latest",) if not options else ()))
+    return options
+
+
+def _main_menu_options() -> list[MenuOption]:
+    return [
+        MenuOption("mode", "Change mode", "Switch between apply, plan, explain, review, and fix."),
+        MenuOption("provider", "Switch provider", "Pick an LLM provider preset."),
+        MenuOption("model", "Switch model", "Pick the current/default model or enter one manually."),
+        MenuOption("effort", "Set reasoning effort", "Adjust reasoning depth."),
+        MenuOption("resume", "Resume session", "Choose a saved session to restore."),
+        MenuOption("cd", "Change project directory", "Switch the active project root."),
+        MenuOption("set", "Edit setting", "Choose any config field and update it."),
+        MenuOption("workspace", "Show workspace", "Refresh the workspace snapshot."),
+        MenuOption("status", "Show status", "Provider, model, auth, and mode."),
+        MenuOption("settings", "Show settings", "Current config values and descriptions."),
+        MenuOption("sessions", "List sessions", "Show recent saved sessions."),
+        MenuOption("help", "Show commands", "Render the command cheat sheet."),
+        MenuOption("quit", "Quit", "Exit the chat session."),
+    ]
+
+
+def _mask_secret(value: str) -> str:
+    stripped = value.strip()
+    if not stripped:
+        return "(empty)"
+    if len(stripped) <= 8:
+        return "*" * len(stripped)
+    return f"{stripped[:4]}...{stripped[-4:]}"
+
+
+def _format_setting_display_value(key: str, value) -> str:
+    if key in _SECRET_SETTING_KEYS:
+        return _mask_secret(str(value))
+    return str(value)
+
+
+def _save_config_data(config_path: Path, data: dict) -> Path:
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(data, indent=2))
+    config_path.chmod(0o600)
+    return config_path
+
+
+def _persist_config_updates(config_path: Path, updates: dict[str, object]) -> Path:
+    data: dict = {}
+    if config_path.exists():
+        try:
+            data = json.loads(config_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            data = {}
+    for key, value in updates.items():
+        if value is None:
+            data.pop(key, None)
+        else:
+            data[key] = value
+    return _save_config_data(config_path, data)
+
+
+def _is_interactive_terminal() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _provider_auth_issue(provider: str, api_key: str = "", oauth_token: str | None = None) -> str | None:
+    normalized_provider = normalize_provider(provider)
+    preset = PROVIDER_PRESETS.get(normalized_provider)
+
+    if normalized_provider == "custom":
+        return None
+
+    if normalized_provider == "openai":
+        if api_key or oauth_token:
+            return None
+        return "OpenAI requires an API key or an OAuth login."
+
+    if not api_key:
+        provider_name = preset.name if preset else normalized_provider
+        return f"{provider_name} requires an API key."
+
+    if preset and preset.key_prefix and not api_key.startswith(preset.key_prefix):
+        return f"Current API key does not look like a {preset.name} key (expected prefix {preset.key_prefix})."
+
+    return None
+
+
+def _has_usable_provider_auth(cfg: AgentConfig) -> bool:
+    return _provider_auth_issue(cfg.provider, cfg.api_key, cfg.oauth_token) is None
+
+
+def _load_or_setup_config(config_path: Path) -> AgentConfig:
+    cfg = load_config(config_path)
+    if _has_usable_provider_auth(cfg):
+        return cfg
+
+    if _is_interactive_terminal():
+        _run_setup_wizard(config_path)
+        cfg = load_config(config_path)
+        if _has_usable_provider_auth(cfg):
+            return cfg
+
+    raise click.ClickException("Not configured. Run 'god-code setup' first.")
 
 
 def build_registry() -> ToolRegistry:
@@ -342,10 +594,10 @@ def _save_chat_session(
 def _is_configured() -> bool:
     """Check if god-code has been configured with an API key."""
     cfg = load_config(default_config_path())
-    return bool(cfg.api_key or cfg.oauth_token)
+    return _has_usable_provider_auth(cfg)
 
 
-def _run_setup_wizard() -> None:
+def _run_setup_wizard(config_path: Path | None = None) -> None:
     """Interactive first-run setup wizard."""
     click.echo()
     click.secho("  God Code — AI Agent for Godot Development", fg="cyan", bold=True)
@@ -373,7 +625,7 @@ def _run_setup_wizard() -> None:
     if provider.provider == "custom":
         config_data["base_url"] = click.prompt("  Base URL", default="http://localhost:11434/v1")
         config_data["model"] = click.prompt("  Model name", default="llama3")
-        api_key = click.prompt("  API key (leave empty if none)", default="", show_default=False)
+        api_key = click.prompt("  API key (leave empty if none)", default="", show_default=False, hide_input=True)
         if api_key:
             config_data["api_key"] = api_key
     else:
@@ -437,10 +689,8 @@ def _run_setup_wizard() -> None:
         click.echo("  Godot not found in PATH. Set 'godot_path' in config later.")
 
     # Save config
-    config_path = default_config_path()
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(config_data, indent=2))
-    config_path.chmod(0o600)
+    config_path = config_path or default_config_path()
+    _save_config_data(config_path, config_data)
 
     click.echo()
     click.secho(f"  Config saved to {config_path}", fg="green")
@@ -452,7 +702,7 @@ def _run_setup_wizard() -> None:
     click.echo()
 
 
-_VERSION = "0.5.2"
+_VERSION = "0.5.3"
 
 
 def _check_update() -> None:
@@ -488,7 +738,7 @@ def main(ctx):
 @main.command()
 def setup():
     """Run the interactive setup wizard (reconfigure provider/API key)."""
-    _run_setup_wizard()
+    _run_setup_wizard(default_config_path())
 
 
 @main.command()
@@ -525,7 +775,9 @@ def status():
     click.echo(f"Effort:   {cfg.reasoning_effort}")
     click.echo(f"Base URL: {cfg.base_url}")
     click.echo(f"Godot:    {cfg.godot_path}")
-    if cfg.oauth_token:
+    if cfg.provider == "custom" and not cfg.api_key and not cfg.oauth_token:
+        click.echo("Auth:     Not required for custom provider")
+    elif cfg.oauth_token:
         click.echo(f"Auth:     OAuth token ({cfg.oauth_token[:8]}...)")
     elif cfg.api_key:
         click.echo(f"Auth:     API key ({cfg.api_key[:8]}...)")
@@ -543,14 +795,12 @@ def ask(prompt: str, project: str, config: str | None, image: tuple[str, ...], p
     """Send a single prompt to the agent."""
     from godot_agent.tui.display import ChatDisplay
 
-    cfg = load_config(Path(config) if config else default_config_path())
+    config_path = Path(config) if config else default_config_path()
+    cfg = _load_or_setup_config(config_path)
     try:
         cfg.mode = normalize_mode(cfg.mode)
     except ValueError:
         cfg.mode = "apply"
-    if not cfg.api_key and not cfg.oauth_token:
-        click.secho("Not configured. Run 'god-code setup' first.", fg="yellow", err=True)
-        raise SystemExit(1)
     project_root = Path(project).resolve()
     show_rich = sys.stdout.isatty() and not plain
     engine = build_engine(cfg, project_root)
@@ -614,14 +864,12 @@ def chat(project: str = ".", config: str | None = None):
     from godot_agent.tui.display import ChatDisplay
 
     display = ChatDisplay()
-    cfg = load_config(Path(config) if config else default_config_path())
+    config_path = Path(config) if config else default_config_path()
+    cfg = _load_or_setup_config(config_path)
     try:
         cfg.mode = normalize_mode(cfg.mode)
     except ValueError:
         cfg.mode = "apply"
-    if not cfg.api_key and not cfg.oauth_token:
-        display.error("Not configured. Run 'god-code setup' first.")
-        raise SystemExit(1)
 
     project_root = Path(project).resolve()
     session_id = str(uuid.uuid4())[:8]
@@ -652,7 +900,13 @@ def chat(project: str = ".", config: str | None = None):
     display.workspace_snapshot(show_commands=True)
 
     # Setup prompt_toolkit for history + autocomplete
-    from godot_agent.tui.input_handler import CommandCompleter, create_session as create_input_session
+    from godot_agent.tui.input_handler import (
+        CommandCompleter,
+        MenuCompleter,
+        create_session as create_input_session,
+        get_input_async,
+        get_multiline_continuation_async,
+    )
     history_file = str(Path.home() / ".config" / "god-code" / "history")
     Path(history_file).parent.mkdir(parents=True, exist_ok=True)
     input_session = create_input_session(history_file)
@@ -724,6 +978,418 @@ def chat(project: str = ".", config: str | None = None):
     def _toolbar() -> str:
         return _toolbar_markup(cfg, project_root, proj_name)
 
+    async def _prompt_menu_choice(
+        title: str,
+        options: list[MenuOption],
+        *,
+        current_value: str | None = None,
+        prompt_hint: str = "Type number or name. Enter to cancel.",
+    ) -> str | None:
+        if not options:
+            return None
+
+        while True:
+            display.menu_panel(title, options, current_value=current_value, prompt_hint=prompt_hint)
+            raw_choice = await get_input_async(
+                input_session,
+                completer=MenuCompleter(options),
+                prompt_markup="<cyan>select&gt;</cyan> ",
+            )
+            if raw_choice is None or not raw_choice.strip():
+                return None
+            choice = resolve_menu_choice(raw_choice, options)
+            if choice is not None:
+                return choice
+            display.error("Unknown selection. Choose a number or listed option.")
+
+    async def _prompt_text_value(
+        prompt_markup: str,
+        *,
+        bottom_toolbar: str | None = None,
+        password: bool = False,
+    ) -> str | None:
+        value = await get_input_async(
+            input_session,
+            prompt_markup=prompt_markup,
+            bottom_toolbar=bottom_toolbar,
+            password=password,
+        )
+        if value is None:
+            return None
+        return value.strip()
+
+    async def _prompt_multiline_value(
+        prompt_markup: str,
+        *,
+        bottom_toolbar: str | None = None,
+    ) -> str | None:
+        first_line = await get_input_async(
+            input_session,
+            prompt_markup=prompt_markup,
+            bottom_toolbar=bottom_toolbar or 'Enter one line, or start with """ for multiline. Blank cancels.',
+        )
+        if first_line is None:
+            return None
+        if not first_line.strip():
+            return None
+        if not _starts_multiline_input(first_line):
+            return first_line
+
+        lines: list[str] = []
+        initial = _multiline_initial_fragment(first_line)
+        if initial:
+            lines.append(initial)
+
+        while True:
+            line = await get_multiline_continuation_async(input_session)
+            if line is None:
+                return None
+            if _is_multiline_terminator(line):
+                break
+            lines.append(line)
+        return "\n".join(lines)
+
+    async def _maybe_complete_provider_auth(
+        *,
+        provider_changed: bool,
+        previous_issue: str | None,
+    ) -> bool:
+        issue = _provider_auth_issue(cfg.provider, cfg.api_key, cfg.oauth_token)
+        if issue is None:
+            return True
+        if not provider_changed and previous_issue == issue:
+            return False
+
+        display.info(issue)
+        if cfg.provider == "openai":
+            toolbar = "Enter an OpenAI API key. Blank cancels. Or run 'god-code login' to use OAuth."
+        else:
+            provider_name = PROVIDER_PRESETS.get(cfg.provider).name if cfg.provider in PROVIDER_PRESETS else cfg.provider
+            toolbar = f"Enter a {provider_name} API key. Blank cancels."
+
+        entered_value = await _prompt_text_value(
+            "<cyan>api_key&gt;</cyan> ",
+            bottom_toolbar=toolbar,
+            password=True,
+        )
+        if entered_value is None:
+            return False
+        if entered_value.upper() == "CLEAR":
+            entered_value = ""
+        if not entered_value:
+            display.error("This provider does not have usable credentials yet.")
+            return False
+        return await _apply_setting_value("api_key", entered_value, prompt_for_auth=False)
+
+    async def _apply_setting_value(key: str, value: str, *, prompt_for_auth: bool = True) -> bool:
+        if not hasattr(cfg, key):
+            display.error(f"Unknown setting: {key}")
+            return False
+
+        old_val = getattr(cfg, key)
+        previous_provider = cfg.provider
+        previous_issue = _provider_auth_issue(cfg.provider, cfg.api_key, cfg.oauth_token)
+        try:
+            if key == "mode":
+                setattr(cfg, key, normalize_mode(value))
+            elif key == "provider":
+                _apply_provider_preset(cfg, value)
+            elif key == "reasoning_effort":
+                setattr(cfg, key, _normalize_reasoning_effort(value))
+            elif key == "model":
+                previous_provider = cfg.provider
+                previous_base_url = cfg.base_url
+                setattr(cfg, key, value)
+                if not cfg.model:
+                    raise ValueError("Usage: /model <name>")
+                _sync_provider_from_model(cfg, previous_provider, previous_base_url)
+            elif isinstance(old_val, bool):
+                setattr(cfg, key, value.lower() in ("true", "1", "yes", "on", "enable", "enabled"))
+            elif isinstance(old_val, int):
+                setattr(cfg, key, int(value))
+            elif isinstance(old_val, float):
+                setattr(cfg, key, float(value))
+            else:
+                setattr(cfg, key, value)
+        except ValueError as e:
+            display.error(str(e))
+            return False
+
+        display.success(f"{key} = {_format_setting_display_value(key, getattr(cfg, key))}")
+        if key == "base_url":
+            cfg.provider = infer_provider(
+                base_url=cfg.base_url,
+                model=cfg.model,
+                provider="",
+            )
+
+        persisted_updates: dict[str, object] = {key: getattr(cfg, key)}
+        if key == "provider":
+            persisted_updates.update({
+                "base_url": cfg.base_url,
+                "model": cfg.model,
+            })
+        elif key == "model":
+            persisted_updates.update({
+                "provider": cfg.provider,
+                "base_url": cfg.base_url,
+            })
+        elif key == "base_url":
+            persisted_updates.update({"provider": cfg.provider})
+
+        _persist_config_updates(config_path, persisted_updates)
+
+        if key in {
+            "language",
+            "verbosity",
+            "extra_prompt",
+            "auto_validate",
+            "mode",
+            "safety",
+            "godot_path",
+            "provider",
+            "model",
+            "base_url",
+            "reasoning_effort",
+            "api_key",
+            "oauth_token",
+            "max_tokens",
+            "temperature",
+        }:
+            await _replace_engine(project_root, preserve_messages=True, rescan_project=False)
+            display.info("Engine rebuilt with updated settings")
+        else:
+            _wire_engine_callbacks(engine, display, cfg)
+        _refresh_workspace()
+
+        if prompt_for_auth and key in {"provider", "model", "base_url"}:
+            provider_changed = cfg.provider != previous_provider
+            await _maybe_complete_provider_auth(
+                provider_changed=provider_changed or key == "provider",
+                previous_issue=previous_issue,
+            )
+        return True
+
+    async def _resume_session_target(target: str) -> bool:
+        record = (
+            load_latest_session(cfg.session_dir, project_path=str(project_root))
+            if target == "latest"
+            else load_session(cfg.session_dir, target)
+        )
+        if target == "latest" and record is None:
+            record = load_latest_session(cfg.session_dir)
+        if not record:
+            display.error("No saved sessions found")
+            return False
+
+        if record.mode:
+            try:
+                cfg.mode = normalize_mode(record.mode)
+            except ValueError:
+                pass
+
+        resume_root = Path(record.project_path).expanduser().resolve() if record.project_path else project_root
+        if record.project_path and not resume_root.exists():
+            display.error(f"Saved project path no longer exists: {record.project_path}")
+            return False
+
+        loaded_messages = record.messages[1:] if record.messages and record.messages[0].role == "system" else record.messages
+        await _replace_engine(
+            resume_root,
+            preserve_messages=False,
+            seed_messages=loaded_messages,
+            rescan_project=False,
+            new_session_id=record.session_id,
+        )
+        display.success(f"Resumed session {record.session_id} ({record.message_count} messages)")
+        _refresh_workspace()
+        return True
+
+    async def _show_mode_menu() -> bool:
+        choice = await _prompt_menu_choice("Interaction Mode", _mode_menu_options(), current_value=cfg.mode)
+        if choice is None:
+            return False
+        display.mode_panel(choice)
+        return await _apply_setting_value("mode", choice)
+
+    async def _show_provider_menu() -> bool:
+        choice = await _prompt_menu_choice("Provider", _provider_menu_options(), current_value=cfg.provider)
+        if choice is None:
+            return False
+        return await _apply_setting_value("provider", choice)
+
+    async def _show_effort_menu() -> bool:
+        choice = await _prompt_menu_choice("Reasoning Effort", _effort_menu_options(), current_value=cfg.reasoning_effort)
+        if choice is None:
+            return False
+        return await _apply_setting_value("reasoning_effort", choice)
+
+    async def _show_model_menu() -> bool:
+        choice = await _prompt_menu_choice("Model", _model_menu_options(cfg), current_value=cfg.model)
+        if choice is None:
+            return False
+        if choice == "__custom__":
+            raw_model = await _prompt_text_value("<cyan>model&gt;</cyan> ")
+            if not raw_model:
+                return False
+            choice = raw_model
+        return await _apply_setting_value("model", choice)
+
+    async def _show_resume_menu() -> bool:
+        sessions = list_sessions(cfg.session_dir, project_path=str(project_root))
+        if not sessions:
+            sessions = list_sessions(cfg.session_dir)
+        if not sessions:
+            display.error("No saved sessions found")
+            return False
+        choice = await _prompt_menu_choice(
+            "Resume Session",
+            _session_menu_options(sessions),
+            prompt_hint="Type number or session id. Enter to cancel.",
+        )
+        if choice is None:
+            return False
+        return await _resume_session_target(choice)
+
+    async def _show_cd_prompt() -> bool:
+        display.info(f"Current project: {project_root}")
+        new_path_value = await _prompt_text_value("<cyan>path&gt;</cyan> ", bottom_toolbar="Enter a project path. Blank cancels.")
+        if not new_path_value:
+            return False
+        new_path = Path(new_path_value).expanduser().resolve()
+        if not new_path.exists():
+            display.error(f"Path not found: {new_path}")
+            return False
+        await _replace_engine(new_path, preserve_messages=False, new_session_id=str(uuid.uuid4())[:8])
+        if has_project:
+            display.success(f"Switched to: {proj_name} ({new_path})")
+        else:
+            display.info(f"Working dir: {new_path}")
+        _refresh_workspace()
+        return True
+
+    async def _show_setting_menu() -> bool:
+        setting_key = await _prompt_menu_choice("Settings", _settings_menu_options())
+        if setting_key is None:
+            return False
+
+        if setting_key == "mode":
+            return await _show_mode_menu()
+        if setting_key == "provider":
+            return await _show_provider_menu()
+        if setting_key == "reasoning_effort":
+            return await _show_effort_menu()
+        if setting_key == "model":
+            return await _show_model_menu()
+
+        value_options = _setting_value_menu_options(setting_key)
+        if value_options is not None:
+            current_value = getattr(cfg, setting_key)
+            normalized_current = str(current_value).lower() if isinstance(current_value, bool) else str(current_value)
+            selected_value = await _prompt_menu_choice(
+                f"Set {setting_key}",
+                value_options,
+                current_value=normalized_current,
+            )
+            if selected_value is None:
+                return False
+            return await _apply_setting_value(setting_key, selected_value)
+
+        if setting_key in _SECRET_SETTING_KEYS:
+            entered_value = await _prompt_text_value(
+                f"<cyan>{setting_key}&gt;</cyan> ",
+                bottom_toolbar="Hidden input. Type CLEAR to remove. Blank cancels.",
+                password=True,
+            )
+            if entered_value is None:
+                return False
+            if entered_value.upper() == "CLEAR":
+                entered_value = ""
+            return await _apply_setting_value(setting_key, entered_value)
+
+        if setting_key in _MULTILINE_SETTING_KEYS:
+            entered_value = await _prompt_multiline_value(
+                f"<cyan>{setting_key}&gt;</cyan> ",
+                bottom_toolbar='Enter one line, or start with """ for multiline. Type CLEAR on a single line to remove.',
+            )
+            if entered_value is None:
+                return False
+            if entered_value.strip().upper() == "CLEAR":
+                entered_value = ""
+            return await _apply_setting_value(setting_key, entered_value)
+
+        if setting_key in {"godot_path", "session_dir"}:
+            entered_value = await _prompt_text_value(
+                f"<cyan>{setting_key}&gt;</cyan> ",
+                bottom_toolbar="Enter a path. Blank cancels.",
+            )
+        else:
+            entered_value = await _prompt_text_value(f"<cyan>{setting_key}&gt;</cyan> ")
+        if not entered_value:
+            return False
+        return await _apply_setting_value(setting_key, entered_value)
+
+    async def _show_main_menu() -> str | None:
+        choice = await _prompt_menu_choice("Command Menu", _main_menu_options())
+        if choice is None:
+            return None
+        if choice == "mode":
+            await _show_mode_menu()
+            return "handled"
+        if choice == "provider":
+            await _show_provider_menu()
+            return "handled"
+        if choice == "model":
+            await _show_model_menu()
+            return "handled"
+        if choice == "effort":
+            await _show_effort_menu()
+            return "handled"
+        if choice == "resume":
+            await _show_resume_menu()
+            return "handled"
+        if choice == "cd":
+            await _show_cd_prompt()
+            return "handled"
+        if choice == "set":
+            await _show_setting_menu()
+            return "handled"
+        if choice == "workspace":
+            _refresh_workspace()
+            return "handled"
+        if choice == "status":
+            if cfg.provider == "custom" and not cfg.api_key and not cfg.oauth_token:
+                auth = "Not required (custom provider)"
+            else:
+                auth = f"API key ({cfg.api_key[:8]}...)" if cfg.api_key else "OAuth" if cfg.oauth_token else "None"
+            display.status_panel({
+                "Provider": cfg.provider,
+                "Model": cfg.model,
+                "Effort": cfg.reasoning_effort,
+                "Mode": cfg.mode,
+                "Project": str(project_root),
+                "Godot": cfg.godot_path,
+                "Auth": auth,
+                "Language": cfg.language,
+                "Verbosity": cfg.verbosity,
+            })
+            return "handled"
+        if choice == "settings":
+            display.settings_panel(cfg)
+            return "handled"
+        if choice == "sessions":
+            sessions = list_sessions(cfg.session_dir, project_path=str(project_root))
+            if not sessions:
+                sessions = list_sessions(cfg.session_dir)
+            display.session_list_panel(sessions)
+            return "handled"
+        if choice == "help":
+            _refresh_workspace(show_commands=True)
+            return "handled"
+        if choice == "quit":
+            return "quit"
+        return None
+
     multiline_buffer: list[str] = []
     in_multiline = False
 
@@ -733,7 +1399,6 @@ def chat(project: str = ".", config: str | None = None):
             while True:
                 try:
                     if in_multiline:
-                        from godot_agent.tui.input_handler import get_multiline_continuation_async
                         line = await get_multiline_continuation_async(input_session)
                         if _is_multiline_terminator(line):
                             in_multiline = False
@@ -743,7 +1408,6 @@ def chat(project: str = ".", config: str | None = None):
                             multiline_buffer.append(line)
                             continue
                     else:
-                        from godot_agent.tui.input_handler import get_input_async
                         user_input = await get_input_async(input_session, completer, bottom_toolbar=_toolbar())
                         if user_input is None:
                             break
@@ -770,45 +1434,20 @@ def chat(project: str = ".", config: str | None = None):
                     display.info(f"Session saved to {path}")
                     continue
 
-                if cmd in ("/load", "/resume", "resume"):
+                if cmd in ("/load", "load"):
                     target = "latest"
                 else:
                     resume_arg = _command_argument(user_input, "/resume")
-                    target = resume_arg or "latest" if resume_arg is not None else None
+                    if cmd in ("/resume", "resume") or resume_arg == "":
+                        target = "__menu__"
+                    else:
+                        target = resume_arg or None if resume_arg is not None else None
 
                 if target is not None:
-                    record = (
-                        load_latest_session(cfg.session_dir, project_path=str(project_root))
-                        if target == "latest"
-                        else load_session(cfg.session_dir, target)
-                    )
-                    if target == "latest" and record is None:
-                        record = load_latest_session(cfg.session_dir)
-                    if not record:
-                        display.error("No saved sessions found")
-                        continue
-
-                    if record.mode:
-                        try:
-                            cfg.mode = normalize_mode(record.mode)
-                        except ValueError:
-                            pass
-
-                    resume_root = Path(record.project_path).expanduser().resolve() if record.project_path else project_root
-                    if record.project_path and not resume_root.exists():
-                        display.error(f"Saved project path no longer exists: {record.project_path}")
-                        continue
-
-                    loaded_messages = record.messages[1:] if record.messages and record.messages[0].role == "system" else record.messages
-                    await _replace_engine(
-                        resume_root,
-                        preserve_messages=False,
-                        seed_messages=loaded_messages,
-                        rescan_project=False,
-                        new_session_id=record.session_id,
-                    )
-                    display.success(f"Resumed session {record.session_id} ({record.message_count} messages)")
-                    _refresh_workspace()
+                    if target == "__menu__":
+                        await _show_resume_menu()
+                    else:
+                        await _resume_session_target(target)
                     continue
 
                 if cmd == "/help":
@@ -832,6 +1471,13 @@ def chat(project: str = ".", config: str | None = None):
                     _refresh_workspace()
                     continue
 
+                if cmd == "/menu":
+                    menu_result = await _show_main_menu()
+                    if menu_result == "quit":
+                        break
+                    if menu_result == "handled":
+                        continue
+
                 if cmd == "/info":
                     if has_project:
                         from godot_agent.godot.project import parse_project_godot
@@ -849,84 +1495,38 @@ def chat(project: str = ".", config: str | None = None):
 
                 mode_arg = _command_argument(user_input, "/mode")
                 if cmd == "/mode" or mode_arg == "":
-                    display.mode_panel(cfg.mode)
+                    await _show_mode_menu()
                     continue
 
                 if mode_arg:
-                    try:
-                        cfg.mode = normalize_mode(mode_arg)
-                    except ValueError as e:
-                        display.error(str(e))
-                        continue
-                    await _replace_engine(project_root, preserve_messages=True, rescan_project=False)
-                    display.update_mode(cfg.mode)
-                    display.success(f"Mode = {cfg.mode}")
-                    _refresh_workspace()
+                    await _apply_setting_value("mode", mode_arg)
                     continue
 
                 provider_arg = _command_argument(user_input, "/provider")
                 if cmd == "/provider" or provider_arg == "":
-                    display.info_panel({
-                        "Provider": cfg.provider,
-                        "Base URL": cfg.base_url,
-                        "Default model": cfg.model,
-                        "Available": ", ".join(PROVIDER_PRESETS.keys()),
-                    })
+                    await _show_provider_menu()
                     continue
 
                 if provider_arg:
-                    try:
-                        provider = _apply_provider_preset(cfg, provider_arg)
-                    except ValueError as e:
-                        display.error(str(e))
-                        continue
-                    await _replace_engine(project_root, preserve_messages=True, rescan_project=False)
-                    display.success(f"Provider = {provider} ({cfg.model})")
-                    _refresh_workspace()
+                    await _apply_setting_value("provider", provider_arg)
                     continue
 
                 model_arg = _command_argument(user_input, "/model")
                 if cmd == "/model" or model_arg == "":
-                    display.info_panel({
-                        "Provider": cfg.provider,
-                        "Model": cfg.model,
-                        "Base URL": cfg.base_url,
-                    })
+                    await _show_model_menu()
                     continue
 
                 if model_arg is not None:
-                    previous_provider = cfg.provider
-                    previous_base_url = cfg.base_url
-                    cfg.model = model_arg
-                    if not cfg.model:
-                        display.error("Usage: /model <name>")
-                        continue
-                    _sync_provider_from_model(cfg, previous_provider, previous_base_url)
-                    await _replace_engine(project_root, preserve_messages=True, rescan_project=False)
-                    display.success(f"Model = {cfg.model}")
-                    _refresh_workspace()
+                    await _apply_setting_value("model", model_arg)
                     continue
 
                 effort_arg = _command_argument(user_input, "/effort")
                 if cmd == "/effort" or effort_arg == "":
-                    display.info_panel({
-                        "Effort": cfg.reasoning_effort,
-                        "Allowed": ", ".join(REASONING_EFFORT_LEVELS),
-                        "Provider": cfg.provider,
-                    })
+                    await _show_effort_menu()
                     continue
 
                 if effort_arg is not None:
-                    try:
-                        if not effort_arg:
-                            raise ValueError("Usage: /effort <level>")
-                        cfg.reasoning_effort = _normalize_reasoning_effort(effort_arg)
-                    except ValueError as e:
-                        display.error(str(e))
-                        continue
-                    await _replace_engine(project_root, preserve_messages=True, rescan_project=False)
-                    display.success(f"Effort = {cfg.reasoning_effort}")
-                    _refresh_workspace()
+                    await _apply_setting_value("reasoning_effort", effort_arg)
                     continue
 
                 if cmd == "/usage":
@@ -942,7 +1542,10 @@ def chat(project: str = ".", config: str | None = None):
                     continue
 
                 if cmd == "/status":
-                    auth = f"API key ({cfg.api_key[:8]}...)" if cfg.api_key else "OAuth" if cfg.oauth_token else "None"
+                    if cfg.provider == "custom" and not cfg.api_key and not cfg.oauth_token:
+                        auth = "Not required (custom provider)"
+                    else:
+                        auth = f"API key ({cfg.api_key[:8]}...)" if cfg.api_key else "OAuth" if cfg.oauth_token else "None"
                     display.status_panel({
                         "Provider": cfg.provider,
                         "Model": cfg.model,
@@ -963,67 +1566,10 @@ def chat(project: str = ".", config: str | None = None):
                 set_args = _set_arguments(user_input)
                 if stripped == "/set" or set_args is not None:
                     if set_args is None:
-                        display.error("Usage: /set <key> <value>")
+                        await _show_setting_menu()
                         continue
                     key, val = set_args
-                    if hasattr(cfg, key):
-                        old_val = getattr(cfg, key)
-                        try:
-                            if key == "mode":
-                                setattr(cfg, key, normalize_mode(val))
-                            elif key == "provider":
-                                _apply_provider_preset(cfg, val)
-                            elif key == "reasoning_effort":
-                                setattr(cfg, key, _normalize_reasoning_effort(val))
-                            elif key == "model":
-                                previous_provider = cfg.provider
-                                previous_base_url = cfg.base_url
-                                setattr(cfg, key, val)
-                                _sync_provider_from_model(cfg, previous_provider, previous_base_url)
-                            elif isinstance(old_val, bool):
-                                setattr(cfg, key, val.lower() in ("true", "1", "yes", "on"))
-                            elif isinstance(old_val, int):
-                                setattr(cfg, key, int(val))
-                            elif isinstance(old_val, float):
-                                setattr(cfg, key, float(val))
-                            else:
-                                setattr(cfg, key, val)
-                        except ValueError as e:
-                            display.error(str(e))
-                            continue
-
-                        display.success(f"{key} = {getattr(cfg, key)}")
-                        if key == "base_url":
-                            cfg.provider = infer_provider(
-                                base_url=cfg.base_url,
-                                model=cfg.model,
-                                provider="",
-                            )
-
-                        if key in (
-                            "language",
-                            "verbosity",
-                            "extra_prompt",
-                            "auto_validate",
-                            "mode",
-                            "safety",
-                            "godot_path",
-                            "provider",
-                            "model",
-                            "base_url",
-                            "reasoning_effort",
-                            "api_key",
-                            "oauth_token",
-                            "max_tokens",
-                            "temperature",
-                        ):
-                            await _replace_engine(project_root, preserve_messages=True, rescan_project=False)
-                            display.info("Engine rebuilt with updated settings")
-                        else:
-                            _wire_engine_callbacks(engine, display, cfg)
-                        _refresh_workspace()
-                    else:
-                        display.error(f"Unknown setting: {key}")
+                    await _apply_setting_value(key, val)
                     continue
 
                 # Support both /cd and cd
@@ -1031,7 +1577,7 @@ def chat(project: str = ".", config: str | None = None):
 
                 if cd_input is not None:
                     if not cd_input:
-                        display.error("Usage: /cd <path>")
+                        await _show_cd_prompt()
                         continue
                     new_path = Path(cd_input).expanduser().resolve()
                     if not new_path.exists():

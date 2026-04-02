@@ -16,6 +16,7 @@ from rich.text import Text
 
 from godot_agent.runtime.events import EngineEvent
 from godot_agent.runtime.modes import get_mode_spec
+from godot_agent.tui.input_handler import MenuOption
 
 
 class ChatDisplay:
@@ -141,6 +142,7 @@ class ChatDisplay:
         t.add_row("/save", "save session snapshot")
         t.add_row("/load", "alias for /resume latest")
         t.add_row("/workspace", "show the workspace snapshot")
+        t.add_row("/menu", "open the interactive command menu")
         t.add_row("/quit", "exit (Ctrl+C also works)")
         return t
 
@@ -326,23 +328,43 @@ class ChatDisplay:
         t.add_column("Value")
         t.add_column("Description", style="dim")
         settings_desc = {
+            "api_key": "Provider API key (masked)",
             "provider": "Model API family (openai, anthropic, gemini, xai, ...)",
             "base_url": "API base URL; used to build the chat/completions endpoint",
             "model": "Default model name for the active provider",
             "reasoning_effort": "Normalized reasoning level (minimal, low, medium, high, xhigh)",
+            "oauth_token": "OAuth token used when no API key is configured (masked)",
+            "max_turns": "Maximum tool rounds per request",
+            "max_tokens": "Maximum output tokens requested from the model",
+            "temperature": "Sampling temperature",
+            "godot_path": "Path to the Godot executable",
             "language": "Agent response language (en, zh-TW, ja)",
             "verbosity": "Response detail level (concise, normal, detailed)",
             "mode": "Interaction mode (apply, plan, explain, review, fix)",
             "auto_validate": "Run Godot validation after file changes",
             "auto_commit": "Suggest git commit after changes",
+            "screenshot_max_iterations": "Retry budget for screenshot stabilization",
             "token_budget": "Max tokens per session (0 = unlimited)",
             "safety": "Shell command restriction (strict, normal, permissive)",
             "streaming": "Render assistant replies incrementally",
             "autosave_session": "Persist chat state after each completed turn",
             "extra_prompt": "Custom instructions appended to system prompt",
+            "session_dir": "Directory used to store chat sessions",
         }
-        for key, desc in settings_desc.items():
+        secret_keys = {"api_key", "oauth_token"}
+        ordered_keys = [
+            "api_key", "provider", "base_url", "model", "reasoning_effort", "oauth_token",
+            "max_turns", "max_tokens", "temperature", "godot_path",
+            "language", "verbosity", "mode", "auto_validate", "auto_commit",
+            "screenshot_max_iterations", "token_budget", "safety", "streaming",
+            "autosave_session", "extra_prompt", "session_dir",
+        ]
+        for key in ordered_keys:
+            desc = settings_desc[key]
             val = getattr(cfg, key, "?")
+            if key in secret_keys and val:
+                text = str(val)
+                val = "*" * min(len(text), 8) if len(text) <= 8 else f"{text[:4]}...{text[-4:]}"
             t.add_row(key, str(val), desc)
         self.console.print(Panel(t, title="Settings", border_style="blue"))
 
@@ -373,6 +395,25 @@ class ChatDisplay:
         spec = get_mode_spec(mode)
         body = f"{spec.label}\n\n{spec.description}"
         self.console.print(Panel(body, title="Interaction Mode", border_style="magenta"))
+
+    def menu_panel(
+        self,
+        title: str,
+        options: list[MenuOption],
+        *,
+        current_value: str | None = None,
+        prompt_hint: str = "Type number or name. Enter to cancel.",
+    ) -> None:
+        table = Table(show_header=True, box=None, padding=(0, 1))
+        table.add_column("#", style="bold cyan", justify="right")
+        table.add_column("Option", style="bold")
+        table.add_column("Description", style="dim")
+        for index, option in enumerate(options, start=1):
+            label = option.label
+            if current_value is not None and option.value == current_value:
+                label = f"{label} [current]"
+            table.add_row(str(index), label, option.description or "-")
+        self.console.print(Panel(Group(table, Text(prompt_hint, style="dim")), title=title, border_style="magenta"))
 
     def handle_event(self, event: EngineEvent) -> None:
         if event.kind == "turn_started":

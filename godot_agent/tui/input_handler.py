@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -17,6 +18,70 @@ def _suffix_after_first_space(text: str) -> str:
         return ""
     parts = text.split(None, 1)
     return parts[1] if len(parts) > 1 else ""
+
+
+def _normalize_choice_token(value: str) -> str:
+    return " ".join(value.strip().lower().split())
+
+
+@dataclass(frozen=True)
+class MenuOption:
+    value: str
+    label: str
+    description: str = ""
+    aliases: tuple[str, ...] = ()
+
+
+def resolve_menu_choice(raw_value: str | None, options: list[MenuOption]) -> str | None:
+    if raw_value is None:
+        return None
+
+    normalized = _normalize_choice_token(raw_value)
+    if not normalized:
+        return None
+
+    if normalized.isdigit():
+        index = int(normalized) - 1
+        if 0 <= index < len(options):
+            return options[index].value
+        return None
+
+    for option in options:
+        tokens = {
+            _normalize_choice_token(option.value),
+            _normalize_choice_token(option.label),
+            *(_normalize_choice_token(alias) for alias in option.aliases),
+        }
+        if normalized in tokens:
+            return option.value
+    return None
+
+
+class MenuCompleter(Completer):
+    """Completion helper for menu selections."""
+
+    def __init__(self, options: list[MenuOption]):
+        self.options = options
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        normalized = _normalize_choice_token(text)
+
+        for index, option in enumerate(self.options, start=1):
+            tokens = [option.value, option.label, *option.aliases]
+            if normalized.isdigit():
+                tokens = [str(index), *tokens]
+            for token in tokens:
+                token_normalized = _normalize_choice_token(token)
+                if normalized and not token_normalized.startswith(normalized):
+                    continue
+                yield Completion(
+                    option.value if not normalized.isdigit() else str(index),
+                    start_position=-len(text),
+                    display=f"{index}. {option.label}",
+                    display_meta=option.description,
+                )
+                break
 
 
 class CommandCompleter(Completer):
@@ -39,14 +104,17 @@ class CommandCompleter(Completer):
         ("/save", "save session"),
         ("/load", "restore session"),
         ("/workspace", "show workspace snapshot"),
+        ("/menu", "open interactive command menu"),
         ("/help", "show commands"),
         ("/quit", "exit"),
     ]
 
     SETTINGS = [
-        "provider", "base_url", "model", "reasoning_effort",
+        "api_key", "base_url", "provider", "model", "reasoning_effort", "oauth_token",
+        "max_turns", "max_tokens", "temperature", "godot_path",
         "language", "verbosity", "mode", "auto_validate", "auto_commit",
-        "token_budget", "safety", "streaming", "autosave_session", "extra_prompt",
+        "screenshot_max_iterations", "token_budget", "safety", "streaming",
+        "autosave_session", "extra_prompt", "session_dir",
     ]
 
     def __init__(self, project_root: Path | None = None):
@@ -115,15 +183,18 @@ def create_session(history_file: str | None = None) -> PromptSession:
 
 def get_input(
     session: PromptSession,
-    completer: CommandCompleter | None = None,
+    completer: Completer | None = None,
     bottom_toolbar: str | None = None,
+    prompt_markup: str = "<green>you&gt;</green> ",
+    password: bool = False,
 ) -> str | None:
     """Get user input with history and completion. Returns None on EOF/interrupt."""
     try:
         return session.prompt(
-            HTML("<green>you&gt;</green> "),
+            HTML(prompt_markup),
             completer=completer,
             bottom_toolbar=HTML(bottom_toolbar) if bottom_toolbar else None,
+            is_password=password,
         )
     except (EOFError, KeyboardInterrupt):
         return None
@@ -131,15 +202,18 @@ def get_input(
 
 async def get_input_async(
     session: PromptSession,
-    completer: CommandCompleter | None = None,
+    completer: Completer | None = None,
     bottom_toolbar: str | None = None,
+    prompt_markup: str = "<green>you&gt;</green> ",
+    password: bool = False,
 ) -> str | None:
     """Async prompt variant for use inside an active event loop."""
     try:
         return await session.prompt_async(
-            HTML("<green>you&gt;</green> "),
+            HTML(prompt_markup),
             completer=completer,
             bottom_toolbar=HTML(bottom_toolbar) if bottom_toolbar else None,
+            is_password=password,
         )
     except (EOFError, KeyboardInterrupt):
         return None

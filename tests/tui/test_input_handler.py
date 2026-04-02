@@ -4,7 +4,7 @@ import string
 import pytest
 from prompt_toolkit.document import Document
 
-from godot_agent.tui.input_handler import CommandCompleter
+from godot_agent.tui.input_handler import CommandCompleter, MenuOption, resolve_menu_choice
 
 
 _RANDOM = random.Random(1337)
@@ -50,6 +50,33 @@ def test_plain_space_input_has_no_completion_crash():
 
 
 @pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("/set api", "api_key"),
+        ("/set godot", "godot_path"),
+        ("/set session", "session_dir"),
+        ("/set oauth", "oauth_token"),
+    ],
+)
+def test_set_completion_lists_extended_setting_keys(text: str, expected: str):
+    completions = _completion_texts(text)
+    assert expected in completions
+
+
+def test_resolve_menu_choice_accepts_index_value_and_alias():
+    options = [
+        MenuOption("apply", "Apply", aliases=("a",)),
+        MenuOption("review", "Review", aliases=("r",)),
+    ]
+
+    assert resolve_menu_choice("1", options) == "apply"
+    assert resolve_menu_choice("review", options) == "review"
+    assert resolve_menu_choice("r", options) == "review"
+    assert resolve_menu_choice("", options) is None
+    assert resolve_menu_choice("99", options) is None
+
+
+@pytest.mark.parametrize(
     "text",
     [
         "",
@@ -82,6 +109,7 @@ def test_completion_edge_inputs_do_not_crash(text: str):
     [
         ("/", "/cd "),
         ("/m", "/mode "),
+        ("/me", "/menu"),
         ("/pro", "/provider "),
         ("/eff", "/effort "),
         ("/wor", "/workspace"),
