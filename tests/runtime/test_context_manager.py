@@ -20,14 +20,17 @@ class TestCompactMessages:
         assert len(result) == 3  # unchanged
 
     def test_compact_old_messages(self):
+        # Use small max_tokens to force compaction even with small messages
+        from godot_agent.runtime.context_manager import smart_compact
         msgs = [Message.system("sys")]
         for i in range(20):
             msgs.append(Message.user(f"question {i}"))
             msgs.append(Message.assistant(content=f"answer {i}"))
-        result = compact_messages(msgs, keep_recent=4)
+        # Force compaction with a tiny max_tokens
+        result = smart_compact(msgs, keep_recent=4, target_ratio=0.01, max_tokens=100)
         assert len(result) < len(msgs)
-        assert result[0].role == "system"  # system kept
-        assert result[-1].content == "answer 19"  # recent kept
+        assert result[0].role == "system"
+        assert result[-1].content == "answer 19"
 
 
 class TestSelectRelevantFiles:

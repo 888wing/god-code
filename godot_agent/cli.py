@@ -204,7 +204,7 @@ def _run_setup_wizard() -> None:
     click.echo()
 
 
-_VERSION = "0.4.1"
+_VERSION = "0.4.3"
 
 
 def _check_update() -> None:

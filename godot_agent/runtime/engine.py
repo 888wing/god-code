@@ -9,13 +9,14 @@ from pathlib import Path
 from typing import Callable
 
 from godot_agent.llm.client import ChatResponse, LLMClient, Message, TokenUsage
-from godot_agent.runtime.context_manager import compact_messages, estimate_tokens
+from godot_agent.runtime.context_manager import smart_compact, estimate_message_tokens
 from godot_agent.runtime.error_loop import format_validation_for_llm, validate_project
 from godot_agent.tools.registry import ToolRegistry
 
 log = logging.getLogger(__name__)
 
-_COMPACT_THRESHOLD = 80000
+# Compact at 75% of 1.05M context to leave room for current turn
+_COMPACT_THRESHOLD = 787500  # 75% of 1.05M
 _FILE_MUTATING_TOOLS = {"write_file", "edit_file"}
 
 
@@ -95,10 +96,16 @@ class ConversationEngine:
         return None
 
     async def _maybe_compact(self) -> None:
-        total = sum(estimate_tokens(str(m.content or "")) for m in self.messages)
+        total = sum(estimate_message_tokens(m) for m in self.messages)
         if total > _COMPACT_THRESHOLD:
-            log.info("Compacting conversation: ~%d tokens", total)
-            self.messages = compact_messages(self.messages, keep_recent=8)
+            before = len(self.messages)
+            log.info("Smart compacting: ~%d tokens, %d messages", total, before)
+            self.messages = smart_compact(
+                self.messages, keep_recent=20, target_ratio=0.60, max_tokens=1050000
+            )
+            after = len(self.messages)
+            after_tokens = sum(estimate_message_tokens(m) for m in self.messages)
+            log.info("Compacted: %d → %d messages, ~%d tokens", before, after, after_tokens)
 
     async def _post_tool_validate(self, tool_names: set[str]) -> str | None:
         if not self.project_path or not self.auto_validate:

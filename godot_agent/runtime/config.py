@@ -16,7 +16,7 @@ class AgentConfig(BaseModel):
     model: str = "gpt-5.4"
     oauth_token: str | None = None
     max_turns: int = 20
-    max_tokens: int = 4096
+    max_tokens: int = 16384  # gpt-5.4 supports up to 128K output
     temperature: float = 0.0
 
     # Godot
