@@ -195,17 +195,18 @@ def _run_setup_wizard() -> None:
     click.echo()
 
 
-_VERSION = "0.2.1"
+_VERSION = "0.2.2"
 
 
 def _check_update() -> None:
     """Check PyPI for a newer version. Non-blocking, fails silently."""
     try:
         import httpx as _httpx
+        from packaging.version import Version
         resp = _httpx.get("https://pypi.org/pypi/god-code/json", timeout=3)
         if resp.status_code == 200:
             latest = resp.json()["info"]["version"]
-            if latest != _VERSION:
+            if Version(latest) > Version(_VERSION):
                 click.secho(f"  Update available: {_VERSION} → {latest}", fg="yellow")
                 click.echo(f"  Run: pip install --upgrade god-code")
                 click.echo()

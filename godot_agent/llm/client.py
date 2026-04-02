@@ -88,10 +88,13 @@ class LLMClient:
         messages: list[Message],
         tools: list[dict] | None = None,
     ) -> dict:
+        # gpt-5+ models use max_completion_tokens instead of max_tokens
+        model = self.config.model
+        token_key = "max_completion_tokens" if model.startswith("gpt-5") else "max_tokens"
         body: dict[str, Any] = {
-            "model": self.config.model,
+            "model": model,
             "messages": [m.to_dict() for m in messages],
-            "max_tokens": self.config.max_tokens,
+            token_key: self.config.max_tokens,
             "temperature": self.config.temperature,
         }
         if tools:
