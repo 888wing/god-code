@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import uuid
 from pathlib import Path
 
@@ -22,20 +24,38 @@ from godot_agent.tools.screenshot import ScreenshotTool
 from godot_agent.tools.search import GlobTool, GrepTool
 from godot_agent.tools.shell import RunShellTool
 
+log = logging.getLogger(__name__)
+
+_PROVIDERS = {
+    "1": {
+        "name": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-5.4",
+        "key_url": "https://platform.openai.com/api-keys",
+        "key_prefix": "sk-",
+    },
+    "2": {
+        "name": "OpenRouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "model": "openai/gpt-4o",
+        "key_url": "https://openrouter.ai/keys",
+        "key_prefix": "sk-or-",
+    },
+    "3": {
+        "name": "Custom",
+        "base_url": "",
+        "model": "",
+        "key_url": "",
+        "key_prefix": "",
+    },
+}
+
 
 def build_registry() -> ToolRegistry:
     registry = ToolRegistry()
     for tool_cls in [
-        ReadFileTool,
-        WriteFileTool,
-        EditFileTool,
-        ListDirTool,
-        GrepTool,
-        GlobTool,
-        GitTool,
-        RunShellTool,
-        RunGodotTool,
-        ScreenshotTool,
+        ReadFileTool, WriteFileTool, EditFileTool, ListDirTool,
+        GrepTool, GlobTool, GitTool, RunShellTool, RunGodotTool, ScreenshotTool,
     ]:
         registry.register(tool_cls())
     return registry
@@ -66,22 +86,146 @@ def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
     )
 
 
-@click.group()
+def _is_configured() -> bool:
+    """Check if god-code has been configured with an API key."""
+    cfg = load_config(default_config_path())
+    return bool(cfg.api_key or cfg.oauth_token)
+
+
+def _run_setup_wizard() -> None:
+    """Interactive first-run setup wizard."""
+    click.echo()
+    click.secho("  God Code — AI Agent for Godot Development", fg="cyan", bold=True)
+    click.echo()
+    click.echo("  First-time setup. Choose your LLM provider:")
+    click.echo()
+    click.echo("  1. OpenAI          (gpt-5.4, vision, tool calling)")
+    click.echo("     Get a key at: https://platform.openai.com/api-keys")
+    click.echo()
+    click.echo("  2. OpenRouter      (access all models with one key)")
+    click.echo("     Get a key at: https://openrouter.ai/keys")
+    click.echo()
+    click.echo("  3. Custom provider (local models, self-hosted, etc.)")
+    click.echo()
+
+    choice = ""
+    while choice not in _PROVIDERS:
+        choice = click.prompt("  Select provider", type=str, default="1")
+
+    provider = _PROVIDERS[choice]
+    config_data: dict = {}
+
+    if choice == "3":
+        config_data["base_url"] = click.prompt("  Base URL", default="http://localhost:11434/v1")
+        config_data["model"] = click.prompt("  Model name", default="llama3")
+        api_key = click.prompt("  API key (leave empty if none)", default="", show_default=False)
+        if api_key:
+            config_data["api_key"] = api_key
+    else:
+        config_data["base_url"] = provider["base_url"]
+        config_data["model"] = provider["model"]
+        click.echo()
+        api_key = click.prompt(f"  Paste your {provider['name']} API key", hide_input=True)
+        if not api_key:
+            click.secho("  No API key provided. Setup cancelled.", fg="red")
+            raise SystemExit(1)
+        config_data["api_key"] = api_key
+
+    # Test the connection
+    click.echo()
+    click.echo("  Testing connection...", nl=False)
+
+    async def _test() -> bool:
+        llm_config = LLMConfig(
+            api_key=config_data.get("api_key", ""),
+            base_url=config_data["base_url"],
+            model=config_data["model"],
+            max_tokens=50,
+        )
+        client = LLMClient(llm_config)
+        try:
+            from godot_agent.llm.client import Message
+            resp = await client.chat([Message.user("Say OK")])
+            return bool(resp.content)
+        except Exception as e:
+            click.echo()
+            click.secho(f"  Connection failed: {e}", fg="red")
+            return False
+        finally:
+            await client.close()
+
+    success = asyncio.run(_test())
+    if not success:
+        click.echo()
+        retry = click.confirm("  Try again with different settings?", default=True)
+        if retry:
+            _run_setup_wizard()
+            return
+        raise SystemExit(1)
+
+    click.secho(" Connected!", fg="green")
+
+    # Detect Godot path
+    import shutil
+    godot_path = shutil.which("godot")
+    if not godot_path:
+        # macOS common path
+        mac_path = "/Applications/Godot.app/Contents/MacOS/Godot"
+        if Path(mac_path).exists():
+            godot_path = mac_path
+    if godot_path:
+        config_data["godot_path"] = godot_path
+        click.echo(f"  Godot found: {godot_path}")
+    else:
+        click.echo("  Godot not found in PATH. Set 'godot_path' in config later.")
+
+    # Save config
+    config_path = default_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config_data, indent=2))
+    config_path.chmod(0o600)
+
+    click.echo()
+    click.secho(f"  Config saved to {config_path}", fg="green")
+    click.echo()
+    click.echo("  Ready! Try:")
+    click.echo("    god-code chat -p ./your-godot-project")
+    click.echo("    god-code ask \"Add a health bar\" -p ./your-game")
+    click.echo("    god-code info -p ./your-game")
+    click.echo()
+
+
+@click.group(invoke_without_command=True)
 @click.version_option(version="0.1.0")
-def main():
+@click.pass_context
+def main(ctx):
     """God Code -- AI coding assistant for Godot game development."""
+    logging.basicConfig(level=logging.WARNING, format="%(message)s")
+    if ctx.invoked_subcommand is None:
+        if not _is_configured():
+            _run_setup_wizard()
+        else:
+            # No subcommand but already configured — show help
+            click.echo(ctx.get_help())
+
+
+@main.command()
+def setup():
+    """Run the interactive setup wizard (reconfigure provider/API key)."""
+    _run_setup_wizard()
 
 
 @main.command()
 def login():
-    """Login to OpenAI via OAuth (ChatGPT/Codex subscription)."""
+    """Login via Codex CLI refresh token (experimental)."""
     from godot_agent.runtime.oauth import login as oauth_login
     try:
         tokens = oauth_login()
-        click.echo("Login successful! Token saved to ~/.config/god-code/auth.json")
-        click.echo(f"Access token expires at: {tokens.get('expires_in', '?')}s")
+        click.secho("Login successful!", fg="green")
+        click.echo(f"Token expires in: {tokens.get('expires_in', '?')}s")
+        click.echo("Saved to ~/.config/god-code/auth.json")
     except Exception as e:
-        click.echo(f"Login failed: {e}", err=True)
+        click.secho(f"Login failed: {e}", fg="red", err=True)
         raise SystemExit(1)
 
 
@@ -100,14 +244,15 @@ def logout():
 def status():
     """Show authentication and configuration status."""
     cfg = load_config(default_config_path())
-    click.echo(f"Model: {cfg.model}")
+    click.echo(f"Model:    {cfg.model}")
     click.echo(f"Base URL: {cfg.base_url}")
+    click.echo(f"Godot:    {cfg.godot_path}")
     if cfg.oauth_token:
-        click.echo(f"Auth: OAuth token ({cfg.oauth_token[:8]}...)")
+        click.echo(f"Auth:     OAuth token ({cfg.oauth_token[:8]}...)")
     elif cfg.api_key:
-        click.echo(f"Auth: API key ({cfg.api_key[:8]}...)")
+        click.echo(f"Auth:     API key ({cfg.api_key[:8]}...)")
     else:
-        click.echo("Auth: Not authenticated. Run 'god-code login' or set GODOT_AGENT_API_KEY.")
+        click.secho("Auth:     Not configured. Run 'god-code setup'.", fg="yellow")
 
 
 @main.command()
@@ -119,16 +264,19 @@ def ask(prompt: str, project: str, config: str | None, image: tuple[str, ...]):
     """Send a single prompt to the agent."""
     cfg = load_config(Path(config) if config else default_config_path())
     if not cfg.api_key and not cfg.oauth_token:
-        click.echo("Not authenticated. Run 'god-code login' or set GODOT_AGENT_API_KEY.", err=True)
+        click.secho("Not configured. Run 'god-code setup' first.", fg="yellow", err=True)
         raise SystemExit(1)
     project_root = Path(project).resolve()
     engine = build_engine(cfg, project_root)
 
     async def _run() -> str:
-        if image:
-            images_b64 = [encode_image(p) for p in image]
-            return await engine.submit_with_images(prompt, images_b64)
-        return await engine.submit(prompt)
+        try:
+            if image:
+                images_b64 = [encode_image(p) for p in image]
+                return await engine.submit_with_images(prompt, images_b64)
+            return await engine.submit(prompt)
+        finally:
+            await engine.close()
 
     result = asyncio.run(_run())
     click.echo(result)
@@ -141,31 +289,40 @@ def chat(project: str, config: str | None):
     """Start an interactive chat session."""
     cfg = load_config(Path(config) if config else default_config_path())
     if not cfg.api_key and not cfg.oauth_token:
-        click.echo("Not authenticated. Run 'god-code login' or set GODOT_AGENT_API_KEY.", err=True)
+        click.secho("Not configured. Run 'god-code setup' first.", fg="yellow", err=True)
         raise SystemExit(1)
     project_root = Path(project).resolve()
     engine = build_engine(cfg, project_root)
     session_id = str(uuid.uuid4())[:8]
 
-    click.echo(f"God Code v0.1.0 -- Session {session_id}")
-    click.echo(f"Project: {project_root}")
-    click.echo(f"Model: {cfg.model}")
-    click.echo("Type 'quit' to exit, 'save' to save session.\n")
+    click.echo()
+    click.secho(f"  God Code v0.1.0", fg="cyan", bold=True)
+    click.echo(f"  Session:  {session_id}")
+    click.echo(f"  Project:  {project_root}")
+    click.echo(f"  Model:    {cfg.model}")
+    click.echo()
+    click.echo("  Commands: 'quit' to exit, 'save' to save session")
+    click.echo()
 
     async def _loop() -> None:
-        while True:
-            try:
-                user_input = click.prompt("you", prompt_suffix="> ")
-            except (EOFError, KeyboardInterrupt):
-                break
-            if user_input.strip().lower() == "quit":
-                break
-            if user_input.strip().lower() == "save":
-                path = save_session(cfg.session_dir, session_id, engine.messages)
-                click.echo(f"Session saved to {path}")
-                continue
-            response = await engine.submit(user_input)
-            click.echo(f"\nagent> {response}\n")
+        try:
+            while True:
+                try:
+                    user_input = click.prompt(click.style("you", fg="green"), prompt_suffix="> ")
+                except (EOFError, KeyboardInterrupt):
+                    break
+                if user_input.strip().lower() == "quit":
+                    break
+                if user_input.strip().lower() == "save":
+                    path = save_session(cfg.session_dir, session_id, engine.messages)
+                    click.echo(f"  Session saved to {path}")
+                    continue
+                response = await engine.submit(user_input)
+                click.echo()
+                click.echo(click.style("agent> ", fg="cyan") + response)
+                click.echo()
+        finally:
+            await engine.close()
 
     asyncio.run(_loop())
     click.echo("Session ended.")
@@ -182,11 +339,11 @@ def info(project: str):
         return
     from godot_agent.godot.project import parse_project_godot
     proj = parse_project_godot(project_file)
-    click.echo(f"Project: {proj.name}")
-    click.echo(f"Version: {proj.version}")
+    click.echo(f"Project:    {proj.name}")
+    click.echo(f"Version:    {proj.version}")
     click.echo(f"Main Scene: {proj.main_scene}")
     click.echo(f"Resolution: {proj.viewport_width}x{proj.viewport_height}")
-    click.echo(f"Autoloads: {len(proj.autoloads)}")
+    click.echo(f"Autoloads:  {len(proj.autoloads)}")
     for name, path in proj.autoloads.items():
         click.echo(f"  {name} -> {path}")
 
