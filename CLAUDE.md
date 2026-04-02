@@ -144,6 +144,16 @@ Smart compression at 75% (787K tokens):
 
 ## Development Rules
 
+### CRITICAL: Python 3.9 Compatibility
+`pyproject.toml` MUST keep `requires-python = ">=3.9"`. macOS ships Python 3.9 via Xcode — users run `pip install god-code` with it. Never change this.
+
+Rules:
+- No `dataclass(slots=True)` — Python 3.10+ only
+- No `match`/`case` statements — Python 3.10+ only
+- Every `.py` file MUST have `from __future__ import annotations` as first import
+- Use `eval_type_backport` dependency for pydantic `str | None` on 3.9
+- **Before every release**: verify `grep "requires-python" pyproject.toml` shows `>=3.9`
+
 ### Adding a New Tool
 1. Create in `godot_agent/tools/your_tool.py` inheriting `BaseTool`
 2. Define `Input`/`Output` as pydantic `BaseModel` (all fields must have defaults for strict mode)
