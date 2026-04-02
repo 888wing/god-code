@@ -100,13 +100,22 @@ class LLMClient:
         messages: list[Message],
         tools: list[dict] | None = None,
     ) -> Message:
+        import asyncio as _asyncio
         body = self._build_request_body(messages, tools)
-        resp = await self._http.post(
-            f"{self.config.base_url}/chat/completions",
-            headers=self._build_headers(),
-            json=body,
-        )
-        resp.raise_for_status()
+        url = f"{self.config.base_url}/chat/completions"
+        headers = self._build_headers()
+
+        for attempt in range(5):
+            resp = await self._http.post(url, headers=headers, json=body)
+            if resp.status_code == 429:
+                wait = min(2 ** attempt * 2, 30)
+                print(f"Rate limited, retrying in {wait}s... (attempt {attempt + 1}/5)")
+                await _asyncio.sleep(wait)
+                continue
+            resp.raise_for_status()
+            break
+        else:
+            resp.raise_for_status()  # Final attempt, let it raise
         data = resp.json()
         choice = data["choices"][0]["message"]
         tool_calls = None
