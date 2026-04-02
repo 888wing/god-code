@@ -61,6 +61,8 @@ def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
         registry=registry,
         system_prompt=system_prompt,
         max_tool_rounds=config.max_turns,
+        project_path=str(project_root),
+        godot_path=config.godot_path,
     )
 
 

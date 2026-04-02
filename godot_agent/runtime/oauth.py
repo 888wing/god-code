@@ -7,8 +7,13 @@ from pathlib import Path
 
 import httpx
 
-TOKEN_URL = "https://auth.openai.com/oauth/token"
-CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"  # Codex public client ID
+import logging
+import os
+
+log = logging.getLogger(__name__)
+
+TOKEN_URL = os.environ.get("GODOT_AGENT_OAUTH_TOKEN_URL", "https://auth.openai.com/oauth/token")
+CLIENT_ID = os.environ.get("GODOT_AGENT_OAUTH_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
 CODEX_AUTH_PATH = Path.home() / ".codex" / "auth.json"
 AUTH_STORE_PATH = Path.home() / ".config" / "god-code" / "auth.json"
 
@@ -100,7 +105,8 @@ def load_stored_token() -> str | None:
                 new_tokens["refresh_token"] = refresh_token
             _save_tokens(new_tokens)
             return new_tokens.get("access_token")
-        except Exception:
+        except Exception as e:
+            log.warning("Token refresh failed: %s", e)
             return None
 
     return None
@@ -117,5 +123,6 @@ def load_codex_auth() -> str | None:
             token_data["refresh_token"] = refresh_token
         _save_tokens(token_data)
         return token_data.get("access_token")
-    except Exception:
+    except Exception as e:
+        log.warning("Codex token refresh failed: %s", e)
         return None

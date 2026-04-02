@@ -115,10 +115,21 @@ class LLMClient:
                 log.warning("Rate limited, retrying in %ds (attempt %d/5)", wait, attempt + 1)
                 await _asyncio.sleep(wait)
                 continue
+            if resp.status_code == 400:
+                error_body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+                error_msg = error_body.get("error", {}).get("message", resp.text[:200])
+                if "content filtering" in error_msg.lower() or "content_filter" in error_msg.lower():
+                    if attempt < 4:
+                        log.warning("Content filter triggered, retrying (attempt %d/5): %s", attempt + 1, error_msg[:100])
+                        await _asyncio.sleep(1)
+                        continue
+                    # Final attempt — return a safe fallback message
+                    return Message.assistant(content=f"[Response blocked by API content filter. Try rephrasing your request or using a different model provider.]")
+                resp.raise_for_status()
             resp.raise_for_status()
             break
         else:
-            resp.raise_for_status()  # Final attempt, let it raise
+            resp.raise_for_status()
         data = resp.json()
         choice = data["choices"][0]["message"]
         tool_calls = None
