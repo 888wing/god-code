@@ -25,15 +25,34 @@ AI coding agent specialized for Godot 4.4 game development. Unlike generic codin
 pip install god-code
 ```
 
-Or from source:
+With MCP support (for Claude Code / Codex integration):
 
 ```bash
-git clone https://github.com/chuisiufai/god-code.git
-cd god-code
-pip install -e ".[dev]"
+pip install god-code[mcp]
 ```
 
 Requires Python 3.9+.
+
+### Claude Code Skill (one-click setup)
+
+If you use Claude Code, install the god-code skill for automated setup:
+
+```bash
+# Copy the skill to your Claude Code skills directory
+mkdir -p ~/.claude/skills/god-code-setup
+curl -sL https://raw.githubusercontent.com/888wing/god-code/main/skills/god-code-setup/SKILL.md \
+  -o ~/.claude/skills/god-code-setup/SKILL.md
+```
+
+Then in Claude Code, just say: **"install god-code and configure MCP"** — it will handle everything automatically.
+
+### From Source
+
+```bash
+git clone https://github.com/888wing/god-code.git
+cd god-code
+pip install -e ".[dev,mcp]"
+```
 
 ## Quick Start
 

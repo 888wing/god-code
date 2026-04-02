@@ -29,8 +29,8 @@ dev = [
 god-code = "godot_agent.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/chuisiufai/god-code"
-Repository = "https://github.com/chuisiufai/god-code"
+Homepage = "https://github.com/888wing/god-code"
+Repository = "https://github.com/888wing/god-code"
 
 [tool.hatch.build.targets.wheel]
 packages = ["godot_agent"]
