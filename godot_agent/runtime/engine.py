@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable
 
 from godot_agent.llm.client import ChatResponse, LLMClient, Message, TokenUsage
 from godot_agent.runtime.context_manager import compact_messages, estimate_tokens
@@ -19,10 +21,15 @@ _FILE_MUTATING_TOOLS = {"write_file", "edit_file"}
 
 @dataclass
 class TurnStats:
-    """Stats for a single submit() call (may include multiple LLM round-trips)."""
     usage: TokenUsage = field(default_factory=TokenUsage)
     api_calls: int = 0
     tools_called: list[str] = field(default_factory=list)
+
+
+# Callback types
+ToolStartCallback = Callable[[str, dict], None]  # (tool_name, args) -> None
+ToolEndCallback = Callable[[str, bool, str], None]  # (tool_name, success, summary) -> None
+DiffCallback = Callable[[str, str, str], None]  # (old_text, new_text, filename) -> None
 
 
 class ConversationEngine:
@@ -34,6 +41,7 @@ class ConversationEngine:
         max_tool_rounds: int = 20,
         project_path: str | None = None,
         godot_path: str = "godot",
+        auto_validate: bool = True,
     ) -> None:
         self.client = client
         self.registry = registry
@@ -41,10 +49,45 @@ class ConversationEngine:
         self.messages: list[Message] = [Message.system(system_prompt)]
         self.project_path = project_path
         self.godot_path = godot_path
-        # Cumulative session stats
+        self.auto_validate = auto_validate
         self.session_usage = TokenUsage()
         self.session_api_calls = 0
         self.last_turn: TurnStats | None = None
+
+        # TUI callbacks
+        self.on_tool_start: ToolStartCallback | None = None
+        self.on_tool_end: ToolEndCallback | None = None
+        self.on_diff: DiffCallback | None = None
+
+    def scan_project(self) -> str | None:
+        """Auto-scan project for context. Returns summary or None."""
+        if not self.project_path:
+            return None
+        root = Path(self.project_path)
+        parts: list[str] = []
+
+        # Read CLAUDE.md if exists
+        for name in ["CLAUDE.md", "README.md"]:
+            f = root / name
+            if f.exists():
+                text = f.read_text(errors="replace")[:2000]
+                parts.append(f"--- {name} ---\n{text}")
+                break
+
+        # List project structure
+        files: list[str] = []
+        for ext in ["*.gd", "*.tscn", "*.tres", "*.json"]:
+            files.extend(str(p.relative_to(root)) for p in root.rglob(ext) if ".godot" not in str(p))
+        if files:
+            parts.append(f"--- Project files ({len(files)}) ---\n" + "\n".join(sorted(files)[:50]))
+
+        if parts:
+            context = "\n\n".join(parts)
+            self.messages.append(Message.user(
+                f"[SYSTEM] Project scan results (auto-loaded):\n{context}"
+            ))
+            return f"Scanned {len(files)} files"
+        return None
 
     async def _maybe_compact(self) -> None:
         total = sum(estimate_tokens(str(m.content or "")) for m in self.messages)
@@ -53,7 +96,7 @@ class ConversationEngine:
             self.messages = compact_messages(self.messages, keep_recent=8)
 
     async def _post_tool_validate(self, tool_names: set[str]) -> str | None:
-        if not self.project_path:
+        if not self.project_path or not self.auto_validate:
             return None
         if not tool_names & _FILE_MUTATING_TOOLS:
             return None
@@ -67,6 +110,23 @@ class ConversationEngine:
             log.debug("Validation skipped: %s", e)
         return None
 
+    def _summarize_args(self, name: str, args: dict) -> str:
+        """Create a short summary of tool arguments for display."""
+        if name in ("read_file", "write_file", "edit_file"):
+            path = args.get("path", "")
+            return path.split("/")[-1] if "/" in path else path
+        if name == "grep":
+            return f'"{args.get("pattern", "")}"'
+        if name == "glob":
+            return args.get("pattern", "")
+        if name == "run_godot":
+            return args.get("command", "")
+        if name == "git":
+            return args.get("command", "")[:30]
+        if name == "run_shell":
+            return args.get("command", "")[:40]
+        return ""
+
     async def _run_loop(self, tools: list[dict] | None) -> str:
         turn = TurnStats()
 
@@ -75,7 +135,6 @@ class ConversationEngine:
             chat_resp: ChatResponse = await self.client.chat(self.messages, tools)
             response = chat_resp.message
 
-            # Track usage
             turn.usage = turn.usage + chat_resp.usage
             turn.api_calls += 1
             self.session_usage = self.session_usage + chat_resp.usage
@@ -93,9 +152,39 @@ class ConversationEngine:
                     args = json.loads(tc.arguments)
                 except json.JSONDecodeError:
                     args = {}
+
                 tool_names_used.add(tc.name)
                 turn.tools_called.append(tc.name)
+                summary = self._summarize_args(tc.name, args)
+
+                # Callback: tool start
+                if self.on_tool_start:
+                    self.on_tool_start(tc.name, args)
+
+                # For edit_file, capture old text for diff
+                old_text = None
+                if tc.name == "edit_file" and self.on_diff:
+                    path = args.get("path", "")
+                    try:
+                        old_text = Path(path).read_text(errors="replace")
+                    except Exception:
+                        old_text = None
+
                 result = await self.registry.execute(tc.name, args)
+
+                # Callback: tool end
+                if self.on_tool_end:
+                    self.on_tool_end(tc.name, result.error is None, result.error or "")
+
+                # Callback: diff for edit_file
+                if tc.name == "edit_file" and old_text is not None and result.error is None and self.on_diff:
+                    try:
+                        new_text = Path(args.get("path", "")).read_text(errors="replace")
+                        filename = args.get("path", "").split("/")[-1]
+                        self.on_diff(old_text, new_text, filename)
+                    except Exception:
+                        pass
+
                 if result.error:
                     content = json.dumps({"error": result.error})
                 else:

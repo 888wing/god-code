@@ -75,7 +75,13 @@ def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
     )
     client = LLMClient(llm_config)
     registry = build_registry()
-    system_prompt = build_system_prompt(project_root, godot_path=config.godot_path)
+    system_prompt = build_system_prompt(
+        project_root,
+        godot_path=config.godot_path,
+        language=config.language,
+        verbosity=config.verbosity,
+        extra_prompt=config.extra_prompt,
+    )
     return ConversationEngine(
         client=client,
         registry=registry,
@@ -83,6 +89,7 @@ def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
         max_tool_rounds=config.max_turns,
         project_path=str(project_root),
         godot_path=config.godot_path,
+        auto_validate=config.auto_validate,
     )
 
 
@@ -195,7 +202,7 @@ def _run_setup_wizard() -> None:
     click.echo()
 
 
-_VERSION = "0.3.0"
+_VERSION = "0.4.0"
 
 
 def _check_update() -> None:
@@ -306,65 +313,85 @@ def ask(prompt: str, project: str, config: str | None, image: tuple[str, ...]):
 @click.option("--config", "-c", default=None, help="Path to config file")
 def chat(project: str = ".", config: str | None = None):
     """Start an interactive chat session."""
-    from rich.console import Console
-    from rich.markdown import Markdown
-    from rich.panel import Panel
-    from rich.table import Table
-    from rich.text import Text
+    from godot_agent.tui.display import ChatDisplay
 
-    console = Console()
+    display = ChatDisplay()
     cfg = load_config(Path(config) if config else default_config_path())
     if not cfg.api_key and not cfg.oauth_token:
-        console.print("[yellow]Not configured. Run 'god-code setup' first.[/]")
+        display.error("Not configured. Run 'god-code setup' first.")
         raise SystemExit(1)
 
     project_root = Path(project).resolve()
     session_id = str(uuid.uuid4())[:8]
     has_project = (project_root / "project.godot").exists()
 
-    # Welcome banner
-    console.print()
-    title = Text("God Code", style="bold cyan")
-    subtitle_parts = [f"Session: {session_id}", f"Model: {cfg.model}"]
+    proj_name = None
     if has_project:
         from godot_agent.godot.project import parse_project_godot
-        proj = parse_project_godot(project_root / "project.godot")
-        subtitle_parts.append(f"Project: {proj.name}")
-    else:
-        subtitle_parts.append(f"Dir: {project_root.name}")
-    subtitle = Text(" | ".join(subtitle_parts), style="dim")
-    console.print(Panel(title, subtitle=subtitle, border_style="cyan", padding=(0, 2)))
+        proj_name = parse_project_godot(project_root / "project.godot").name
 
+    display.welcome(session_id, cfg.model, proj_name, str(project_root))
     if not has_project:
-        console.print("[yellow]  No project.godot found. Use /cd to navigate to a Godot project.[/]")
-
-    # Commands table
-    cmd_table = Table(show_header=False, box=None, padding=(0, 2), show_edge=False)
-    cmd_table.add_column(style="green")
-    cmd_table.add_column(style="dim")
-    cmd_table.add_row("/cd <path>", "change project directory")
-    cmd_table.add_row("/info", "show project details")
-    cmd_table.add_row("/status", "show model & auth")
-    cmd_table.add_row("/usage", "show token usage & cost")
-    cmd_table.add_row("/save", "save session")
-    cmd_table.add_row("/quit", "exit")
-    console.print(cmd_table)
-    console.print()
+        display.no_project_warning()
+    cmd_table = display.commands_table()
+    display.console.print(cmd_table)
+    display.console.print()
 
     engine = build_engine(cfg, project_root)
 
+    # Wire tool callbacks to TUI
+    engine.on_tool_start = lambda name, args: display.tool_start(name, engine._summarize_args(name, args))
+    engine.on_tool_end = lambda name, ok, err: display.tool_result(name, ok, err)
+    engine.on_diff = lambda old, new, fn: display.show_diff(old, new, fn)
+
+    # Auto-scan project on entry
+    if has_project:
+        scan_result = engine.scan_project()
+        if scan_result:
+            display.info(f"Project auto-scanned: {scan_result}")
+
     def _rebuild_engine(new_root: Path) -> ConversationEngine:
-        nonlocal project_root, has_project
+        nonlocal project_root, has_project, proj_name
         project_root = new_root.resolve()
         has_project = (project_root / "project.godot").exists()
-        return build_engine(cfg, project_root)
+        if has_project:
+            from godot_agent.godot.project import parse_project_godot
+            proj_name = parse_project_godot(project_root / "project.godot").name
+        else:
+            proj_name = None
+        eng = build_engine(cfg, project_root)
+        eng.on_tool_start = lambda name, args: display.tool_start(name, eng._summarize_args(name, args))
+        eng.on_tool_end = lambda name, ok, err: display.tool_result(name, ok, err)
+        eng.on_diff = lambda old, new, fn: display.show_diff(old, new, fn)
+        if has_project:
+            eng.scan_project()
+        return eng
+
+    multiline_buffer: list[str] = []
+    in_multiline = False
 
     async def _loop() -> None:
-        nonlocal engine
+        nonlocal engine, in_multiline, multiline_buffer
         try:
             while True:
                 try:
-                    user_input = console.input("[green]you>[/] ")
+                    if in_multiline:
+                        line = display.console.input("[dim]...[/] ")
+                        if line.strip() == '"""':
+                            in_multiline = False
+                            user_input = "\n".join(multiline_buffer)
+                            multiline_buffer = []
+                        else:
+                            multiline_buffer.append(line)
+                            continue
+                    else:
+                        user_input = display.console.input("[green]you>[/] ")
+                        if user_input.strip().startswith('"""'):
+                            in_multiline = True
+                            rest = user_input.strip()[3:]
+                            if rest:
+                                multiline_buffer.append(rest)
+                            continue
                 except (EOFError, KeyboardInterrupt):
                     break
 
@@ -375,54 +402,95 @@ def chat(project: str = ".", config: str | None = None):
 
                 if cmd in ("/save", "save"):
                     path = save_session(cfg.session_dir, session_id, engine.messages)
-                    console.print(f"  [dim]Session saved to {path}[/]")
+                    display.info(f"Session saved to {path}")
+                    continue
+
+                if cmd == "/load":
+                    from godot_agent.runtime.session import load_session as _load_sess
+                    import os
+                    sess_dir = cfg.session_dir
+                    if os.path.exists(sess_dir):
+                        files = sorted(Path(sess_dir).glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+                        if files:
+                            display.info(f"Loading: {files[0].name}")
+                            # Note: restore is informational — messages are raw dicts
+                            display.success("Session history loaded for context")
+                        else:
+                            display.error("No saved sessions found")
+                    else:
+                        display.error("No saved sessions found")
                     continue
 
                 if cmd == "/help":
-                    console.print(cmd_table)
+                    display.console.print(cmd_table)
                     continue
 
                 if cmd == "/info":
                     if has_project:
                         from godot_agent.godot.project import parse_project_godot
                         proj = parse_project_godot(project_root / "project.godot")
-                        info_table = Table(show_header=False, box=None, padding=(0, 1))
-                        info_table.add_column(style="bold")
-                        info_table.add_column()
-                        info_table.add_row("Project", proj.name)
-                        info_table.add_row("Version", proj.version)
-                        info_table.add_row("Main Scene", proj.main_scene)
-                        info_table.add_row("Resolution", f"{proj.viewport_width}x{proj.viewport_height}")
-                        info_table.add_row("Autoloads", str(len(proj.autoloads)))
-                        console.print(Panel(info_table, title="Project Info", border_style="blue"))
+                        display.info_panel({
+                            "Project": proj.name,
+                            "Version": proj.version,
+                            "Main Scene": proj.main_scene,
+                            "Resolution": f"{proj.viewport_width}x{proj.viewport_height}",
+                            "Autoloads": str(len(proj.autoloads)),
+                        })
                     else:
-                        console.print(f"[yellow]  No project.godot in {project_root}[/]")
+                        display.error(f"No project.godot in {project_root}")
                     continue
 
                 if cmd == "/usage":
                     sess = engine.session_usage
                     cost = sess.cost_estimate(cfg.model)
-                    usage_table = Table(show_header=False, box=None, padding=(0, 1))
-                    usage_table.add_column(style="bold")
-                    usage_table.add_column()
-                    usage_table.add_row("Input tokens", f"{sess.prompt_tokens:,}")
-                    usage_table.add_row("Output tokens", f"{sess.completion_tokens:,}")
-                    usage_table.add_row("Total tokens", f"{sess.total_tokens:,}")
-                    usage_table.add_row("API calls", str(engine.session_api_calls))
-                    usage_table.add_row("Est. cost", f"${cost:.4f}")
-                    console.print(Panel(usage_table, title="Usage", border_style="blue"))
+                    display.info_panel({
+                        "Input tokens": f"{sess.prompt_tokens:,}",
+                        "Output tokens": f"{sess.completion_tokens:,}",
+                        "Total tokens": f"{sess.total_tokens:,}",
+                        "API calls": str(engine.session_api_calls),
+                        "Est. cost": f"${cost:.4f}",
+                    })
                     continue
 
                 if cmd == "/status":
-                    st = Table(show_header=False, box=None, padding=(0, 1))
-                    st.add_column(style="bold")
-                    st.add_column()
-                    st.add_row("Model", cfg.model)
-                    st.add_row("Project", str(project_root))
-                    st.add_row("Godot", cfg.godot_path)
                     auth = f"API key ({cfg.api_key[:8]}...)" if cfg.api_key else "OAuth" if cfg.oauth_token else "None"
-                    st.add_row("Auth", auth)
-                    console.print(Panel(st, title="Status", border_style="blue"))
+                    display.status_panel({
+                        "Model": cfg.model,
+                        "Project": str(project_root),
+                        "Godot": cfg.godot_path,
+                        "Auth": auth,
+                        "Language": cfg.language,
+                        "Verbosity": cfg.verbosity,
+                    })
+                    continue
+
+                if cmd == "/settings":
+                    display.settings_panel(cfg)
+                    continue
+
+                if user_input.strip().startswith("/set "):
+                    parts = user_input.strip().split(None, 2)
+                    if len(parts) == 3:
+                        key, val = parts[1], parts[2]
+                        if hasattr(cfg, key):
+                            # Convert types
+                            old_val = getattr(cfg, key)
+                            if isinstance(old_val, bool):
+                                setattr(cfg, key, val.lower() in ("true", "1", "yes"))
+                            elif isinstance(old_val, int):
+                                setattr(cfg, key, int(val))
+                            else:
+                                setattr(cfg, key, val)
+                            display.success(f"{key} = {getattr(cfg, key)}")
+                            # Rebuild engine if prompt-affecting setting changed
+                            if key in ("language", "verbosity", "extra_prompt", "auto_validate"):
+                                await engine.close()
+                                engine = _rebuild_engine(project_root)
+                                display.info("Engine rebuilt with new settings")
+                        else:
+                            display.error(f"Unknown setting: {key}")
+                    else:
+                        display.error("Usage: /set <key> <value>")
                     continue
 
                 # Support both /cd and cd
@@ -437,65 +505,50 @@ def chat(project: str = ".", config: str | None = None):
                 if cd_input is not None:
                     new_path = Path(cd_input).expanduser().resolve()
                     if not new_path.exists():
-                        console.print(f"[red]  Path not found: {new_path}[/]")
+                        display.error(f"Path not found: {new_path}")
                         continue
                     await engine.close()
                     engine = _rebuild_engine(new_path)
-                    if (new_path / "project.godot").exists():
-                        from godot_agent.godot.project import parse_project_godot
-                        proj = parse_project_godot(new_path / "project.godot")
-                        console.print(f"[green]  Switched to: {proj.name}[/] [dim]({new_path})[/]")
+                    if has_project:
+                        display.success(f"Switched to: {proj_name} ({new_path})")
                     else:
-                        console.print(f"  Working dir: {new_path}")
-                        console.print("[yellow]  No project.godot found here.[/]")
+                        display.info(f"Working dir: {new_path}")
+                        display.no_project_warning()
                     continue
 
-                # Regular message → send to LLM with spinner
-                with console.status("[cyan]Thinking...[/]", spinner="dots"):
-                    response = await engine.submit(user_input)
+                # Regular message → send to LLM
+                try:
+                    with display.thinking():
+                        response = await engine.submit(user_input)
+                except KeyboardInterrupt:
+                    display.info("Cancelled")
+                    continue
 
-                console.print()
-                console.print(Panel(
-                    Markdown(response),
-                    title="[cyan]agent[/]",
-                    border_style="cyan",
-                    padding=(1, 2),
-                ))
+                display.agent_response(response)
 
-                # Show token usage
+                # Token usage
                 turn = engine.last_turn
                 sess = engine.session_usage
                 if turn:
-                    cost_turn = turn.usage.cost_estimate(cfg.model)
-                    cost_sess = sess.cost_estimate(cfg.model)
-                    tools_str = f"  tools: {', '.join(turn.tools_called)}" if turn.tools_called else ""
-                    console.print(
-                        f"  [dim]tokens: {turn.usage.total_tokens:,} "
-                        f"(in:{turn.usage.prompt_tokens:,} out:{turn.usage.completion_tokens:,}) "
-                        f"~${cost_turn:.4f}"
-                        f"{tools_str}[/]"
+                    display.usage_line(
+                        turn.usage.total_tokens, turn.usage.prompt_tokens, turn.usage.completion_tokens,
+                        turn.usage.cost_estimate(cfg.model), turn.tools_called,
+                        sess.total_tokens, engine.session_api_calls, sess.cost_estimate(cfg.model),
                     )
-                    console.print(
-                        f"  [dim]session: {sess.total_tokens:,} tokens "
-                        f"| {engine.session_api_calls} API calls "
-                        f"| ~${cost_sess:.4f} total[/]"
-                    )
-                console.print()
+
+                # Budget warning
+                if cfg.token_budget > 0:
+                    display.budget_warning(sess.total_tokens, cfg.token_budget)
+
         finally:
             await engine.close()
 
     asyncio.run(_loop())
-    # Session summary
     sess = engine.session_usage
-    cost = sess.cost_estimate(cfg.model)
-    console.print()
-    console.print(Panel(
-        f"Tokens: {sess.total_tokens:,} (in:{sess.prompt_tokens:,} out:{sess.completion_tokens:,})\n"
-        f"API calls: {engine.session_api_calls}\n"
-        f"Estimated cost: ${cost:.4f}",
-        title="[dim]Session Summary[/]",
-        border_style="dim",
-    ))
+    display.session_summary(
+        sess.total_tokens, sess.prompt_tokens, sess.completion_tokens,
+        engine.session_api_calls, sess.cost_estimate(cfg.model),
+    )
 
 
 @main.command()

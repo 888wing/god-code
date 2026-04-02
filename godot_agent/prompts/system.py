@@ -14,15 +14,33 @@ def build_system_prompt(
     user_hint: str = "",
     file_paths: list[str] | None = None,
     godot_path: str = "godot",
+    language: str = "en",
+    verbosity: str = "normal",
+    extra_prompt: str = "",
 ) -> str:
     sections = [_core_identity()]
+
+    # Language instruction
+    lang_map = {
+        "zh-TW": "Always respond in Traditional Chinese (繁體中文).",
+        "zh-CN": "Always respond in Simplified Chinese (简体中文).",
+        "ja": "Always respond in Japanese (日本語).",
+        "ko": "Always respond in Korean (한국어).",
+    }
+    if language in lang_map:
+        sections.append(f"## Language\n\n{lang_map[language]}")
+
+    # Verbosity
+    if verbosity == "concise":
+        sections.append("## Response Style\n\nBe extremely concise. No explanations unless asked. Just show the code changes.")
+    elif verbosity == "detailed":
+        sections.append("## Response Style\n\nBe thorough and detailed. Explain your reasoning, show before/after comparisons, and suggest follow-up improvements.")
 
     # Inject relevant Playbook knowledge based on context
     knowledge_sections = select_sections(user_hint, file_paths, max_sections=4)
     if knowledge_sections:
         sections.append(format_knowledge_injection(knowledge_sections))
 
-    # Build discipline (always included)
     sections.append(BUILD_DISCIPLINE_PROMPT)
 
     # Project context
@@ -34,6 +52,10 @@ def build_system_prompt(
         sections.append("## Project Context\n\nNo project.godot found in working directory.")
 
     sections.append(_available_tools())
+
+    # User custom instructions
+    if extra_prompt:
+        sections.append(f"## Custom Instructions\n\n{extra_prompt}")
     return "\n\n".join(sections)
 
 
