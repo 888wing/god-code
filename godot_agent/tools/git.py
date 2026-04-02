@@ -6,6 +6,7 @@ import shlex
 from pydantic import BaseModel, Field
 
 from godot_agent.tools.base import BaseTool, ToolResult
+from godot_agent.tools.file_ops import _validate_path
 
 
 class GitTool(BaseTool):
@@ -28,14 +29,22 @@ class GitTool(BaseTool):
         stderr: str
         exit_code: int
 
+    def validate_input(self, input: Input) -> str | None:
+        if not input.command.strip():
+            return "Git command cannot be empty"
+        return None
+
     async def execute(self, input: Input) -> ToolResult:
         try:
             args = ["git"] + shlex.split(input.command)
+            cwd, err = _validate_path(input.cwd)
+            if err:
+                return ToolResult(error=err)
             proc = await asyncio.create_subprocess_exec(
                 *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=input.cwd,
+                cwd=str(cwd),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
             return ToolResult(

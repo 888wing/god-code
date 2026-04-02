@@ -1,0 +1,8 @@
+{
+  "id": "player_movement",
+  "title": "Player Movement",
+  "description": "Verify that player movement still emits movement evidence and uses expected input actions.",
+  "path_contains": ["player", "movement", "controller"],
+  "required_events": ["player_moved"],
+  "required_inputs": ["move_left", "move_right"]
+}

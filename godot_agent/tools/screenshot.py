@@ -7,6 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from godot_agent.tools.base import BaseTool, ToolResult
+from godot_agent.tools.file_ops import _validate_path
 from godot_agent.tools.godot_cli import build_screenshot_script
 from godot_agent.llm.vision import encode_image
 
@@ -32,8 +33,17 @@ class ScreenshotTool(BaseTool):
         image_path: str
         image_base64: str
 
+    def is_read_only(self) -> bool:
+        return True
+
+    def is_destructive(self) -> bool:
+        return False
+
     async def execute(self, input: Input) -> ToolResult:
         try:
+            project_path, err = _validate_path(input.project_path)
+            if err:
+                return ToolResult(error=err)
             with tempfile.TemporaryDirectory() as tmpdir:
                 screenshot_path = str(Path(tmpdir) / "screenshot.png")
                 script_path = str(Path(tmpdir) / "capture.gd")
@@ -50,7 +60,7 @@ class ScreenshotTool(BaseTool):
                     script_path,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    cwd=input.project_path,
+                    cwd=str(project_path),
                 )
                 await asyncio.wait_for(proc.communicate(), timeout=30)
 

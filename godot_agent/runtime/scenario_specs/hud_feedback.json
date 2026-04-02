@@ -1,0 +1,7 @@
+{
+  "id": "hud_feedback",
+  "title": "HUD Feedback",
+  "description": "Verify that HUD changes still expose a runtime HUD node and produce no runtime errors.",
+  "path_contains": ["hud", "ui", "health_bar"],
+  "required_nodes": ["Hud"]
+}

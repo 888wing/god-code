@@ -44,6 +44,11 @@ class TestToolRegistry:
         assert schema["function"]["name"] == "mock_tool"
         assert "message" in schema["function"]["parameters"]["properties"]
 
+    def test_generate_schemas_with_filter(self):
+        registry = ToolRegistry()
+        registry.register(MockTool())
+        assert registry.to_openai_tools({"other_tool"}) == []
+
     @pytest.mark.asyncio
     async def test_execute_tool(self):
         registry = ToolRegistry()

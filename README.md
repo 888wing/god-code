@@ -5,6 +5,9 @@ AI coding agent specialized for Godot 4.4 game development. Unlike generic codin
 ## Features
 
 - **10 tools**: read/write/edit files, grep/glob search, git, shell, Godot headless runner, screenshot capture
+- **Workspace-style chat TUI**: session snapshot, recent activity timeline, live tool feedback, and validation visibility
+- **Interaction modes**: `apply`, `plan`, `explain`, `review`, and `fix` with mode-aware prompts and tool access
+- **Session recovery**: autosave, `/sessions`, `/resume`, and project-aware session metadata
 - **Godot-native understanding**: project.godot parser, .tscn scene parser/writer/validator, collision layer planner
 - **Code quality**: GDScript linter (naming, ordering, type annotations), cross-file consistency checker, design pattern advisor
 - **Smart knowledge injection**: 17 Godot Playbook sections auto-selected by task context
@@ -51,6 +54,9 @@ EOF
 ```bash
 # Single prompt
 god-code ask "Add a health bar to the player scene" --project ./my-game
+
+# Script-friendly plain output
+god-code ask "Summarize this project" --project ./my-game --plain
 
 # Interactive chat
 god-code chat --project ./my-game
@@ -108,9 +114,14 @@ god-code logout   # Removes stored credentials
   "base_url": "https://api.openai.com/v1",
   "model": "gpt-5.4",
   "oauth_token": null,
+  "mode": "apply",
   "max_turns": 20,
   "max_tokens": 4096,
   "temperature": 0.0,
+  "auto_validate": true,
+  "auto_commit": false,
+  "streaming": true,
+  "autosave_session": true,
   "screenshot_max_iterations": 5,
   "godot_path": "godot",
   "session_dir": ".agent_sessions"
@@ -118,6 +129,16 @@ god-code logout   # Removes stored credentials
 ```
 
 All fields can be overridden with `GODOT_AGENT_` prefixed environment variables.
+
+## Chat Commands
+
+Interactive chat supports:
+
+- `/mode [apply|plan|explain|review|fix]`
+- `/sessions` and `/resume [session-id]`
+- `/new` to start a fresh session
+- `/workspace` to re-render the session snapshot
+- `/set <key> <value>` for live configuration changes
 
 ## System Prompt & Output Quality
 

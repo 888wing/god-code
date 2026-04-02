@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator, Callable
+from typing import Callable
 
 from godot_agent.llm.client import ChatResponse, LLMClient, Message, ToolCall, TokenUsage
 
@@ -28,7 +28,7 @@ async def stream_chat_with_callback(
 
     async with client._http.stream(
         "POST",
-        f"{client.config.base_url}/chat/completions",
+        client._build_url(),
         headers=client._build_headers(),
         json=body,
     ) as resp:

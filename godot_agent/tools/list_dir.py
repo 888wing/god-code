@@ -1,11 +1,10 @@
 # godot_agent/tools/list_dir.py
 from __future__ import annotations
 
-from pathlib import Path
-
 from pydantic import BaseModel, Field
 
 from godot_agent.tools.base import BaseTool, ToolResult
+from godot_agent.tools.file_ops import _validate_path
 
 
 class ListDirTool(BaseTool):
@@ -21,9 +20,17 @@ class ListDirTool(BaseTool):
         entries: list[dict]
         total: int
 
+    def is_read_only(self) -> bool:
+        return True
+
+    def is_destructive(self) -> bool:
+        return False
+
     async def execute(self, input: Input) -> ToolResult:
         try:
-            root = Path(input.path)
+            root, err = _validate_path(input.path)
+            if err:
+                return ToolResult(error=err)
             if not root.exists():
                 return ToolResult(error=f"Path not found: {input.path}")
             if not root.is_dir():

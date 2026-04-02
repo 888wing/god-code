@@ -114,3 +114,47 @@ class TestConversationEngine:
         assert engine.last_turn is not None
         assert engine.last_turn.usage.total_tokens == 150
         assert engine.session_api_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_allowed_tools_filter(self):
+        registry = ToolRegistry()
+        registry.register(EchoTool())
+        mock_client = AsyncMock(spec=LLMClient)
+        mock_client.chat = AsyncMock(return_value=_resp(Message.assistant(content="No tools.")))
+        engine = ConversationEngine(client=mock_client, registry=registry, system_prompt="test")
+        engine.allowed_tools = set()
+        await engine.submit("Hello")
+        call_args = mock_client.chat.call_args
+        assert call_args[0][1] is None or call_args[1].get("tools") is None
+
+    @pytest.mark.asyncio
+    async def test_emits_runtime_events_for_tool_turn(self):
+        registry = ToolRegistry()
+        registry.register(EchoTool())
+        call_msg = _resp(Message.assistant(tool_calls=[ToolCall(id="call_1", name="echo", arguments='{"text": "test"}')]))
+        final_msg = _resp(Message.assistant(content="The echo said: echo: test"))
+        mock_client = AsyncMock(spec=LLMClient)
+        mock_client.chat = AsyncMock(side_effect=[call_msg, final_msg])
+        engine = ConversationEngine(client=mock_client, registry=registry, system_prompt="test")
+
+        events = []
+        engine.on_event = events.append
+
+        await engine.submit("Echo something")
+
+        kinds = [event.kind for event in events]
+        assert "turn_started" in kinds
+        assert "tool_started" in kinds
+        assert "tool_finished" in kinds
+        assert "turn_finished" in kinds
+
+    @pytest.mark.asyncio
+    async def test_blank_input_does_not_call_model(self):
+        mock_client = AsyncMock(spec=LLMClient)
+        registry = ToolRegistry()
+        engine = ConversationEngine(client=mock_client, registry=registry, system_prompt="test")
+
+        response = await engine.submit("\x7f")
+
+        assert response == ""
+        mock_client.chat.assert_not_called()

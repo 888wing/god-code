@@ -2,6 +2,18 @@
 
 All notable changes to God Code will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Workspace-style chat TUI with session snapshot, recent activity, and live streaming panels
+- Interaction modes (`apply`, `plan`, `explain`, `review`, `fix`) with mode-aware tool availability
+- Autosaved session metadata with `/sessions`, `/resume`, `/new`, and project-aware restore flow
+
+### Changed
+- Unified `ask` and `chat` rendering pipeline, including tool progress and validation feedback
+- Improved post-tool validation visibility and tool result summaries in interactive sessions
+- Session persistence now preserves assistant tool calls and richer metadata for restore
+
 ## [0.1.0] - 2026-04-02
 
 ### Added

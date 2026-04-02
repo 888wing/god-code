@@ -9,7 +9,7 @@ import re
 from pydantic import BaseModel, Field
 
 from godot_agent.tools.base import BaseTool, ToolResult
-from godot_agent.tools.file_ops import _project_root
+from godot_agent.tools.file_ops import _project_root, _validate_path
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +82,11 @@ class RunShellTool(BaseTool):
         cwd = input.cwd
         if _project_root and cwd == ".":
             cwd = str(_project_root)
+        elif cwd != ".":
+            resolved_cwd, err = _validate_path(cwd)
+            if err:
+                return ToolResult(error=err)
+            cwd = str(resolved_cwd)
 
         log.info("shell: %s (cwd=%s)", input.command, cwd)
 

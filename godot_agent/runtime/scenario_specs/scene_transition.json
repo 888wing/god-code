@@ -1,0 +1,7 @@
+{
+  "id": "scene_transition",
+  "title": "Scene Transition",
+  "description": "Verify that scene transition changes still emit transition events and load the expected scene.",
+  "path_contains": ["transition", "portal", "scene"],
+  "required_events": ["scene_changed"]
+}

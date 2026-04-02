@@ -19,6 +19,7 @@ def _resp(msg: Message) -> ChatResponse:
     return ChatResponse(message=msg, usage=TokenUsage())
 from godot_agent.prompts.system import build_system_prompt
 from godot_agent.runtime.engine import ConversationEngine
+from godot_agent.tools.file_ops import set_project_root
 from godot_agent.tools.file_ops import EditFileTool, ReadFileTool, WriteFileTool
 from godot_agent.tools.registry import ToolRegistry
 from godot_agent.tools.search import GlobTool, GrepTool
@@ -45,6 +46,7 @@ def _make_engine(
     godot_project: Path, mock_client: AsyncMock
 ) -> ConversationEngine:
     """Build a ConversationEngine wired to real tools and a mock LLM."""
+    set_project_root(godot_project)
     registry = ToolRegistry()
     for tool_cls in [ReadFileTool, WriteFileTool, EditFileTool, GrepTool, GlobTool]:
         registry.register(tool_cls())

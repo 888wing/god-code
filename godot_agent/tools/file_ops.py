@@ -18,6 +18,12 @@ def set_project_root(root: Path) -> None:
     _project_root = root.resolve()
 
 
+def clear_project_root() -> None:
+    """Clear the active project root. Primarily useful in tests."""
+    global _project_root
+    _project_root = None
+
+
 def _validate_path(path_str: str) -> tuple[Path, str | None]:
     """Resolve and validate a path is within project root. Returns (path, error)."""
     p = Path(path_str).resolve()
@@ -38,6 +44,12 @@ class ReadFileTool(BaseTool):
     class Output(BaseModel):
         content: str
         line_count: int
+
+    def is_read_only(self) -> bool:
+        return True
+
+    def is_destructive(self) -> bool:
+        return False
 
     async def execute(self, input: Input) -> ToolResult:
         try:
@@ -68,6 +80,9 @@ class WriteFileTool(BaseTool):
     class Output(BaseModel):
         bytes_written: int
 
+    def is_destructive(self) -> bool:
+        return False
+
     async def execute(self, input: Input) -> ToolResult:
         try:
             p, err = _validate_path(input.path)
@@ -91,6 +106,9 @@ class EditFileTool(BaseTool):
 
     class Output(BaseModel):
         success: bool
+
+    def is_destructive(self) -> bool:
+        return False
 
     async def execute(self, input: Input) -> ToolResult:
         try:

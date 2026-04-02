@@ -56,6 +56,9 @@ def remove_node(tscn_text: str, node_name: str) -> str:
     skip = False
 
     for line in lines:
+        connection_match = re.match(r'\[connection\s+.*from="([^"]+)".*to="([^"]+)".*\]', line.strip())
+        if connection_match and node_name in {connection_match.group(1), connection_match.group(2)}:
+            continue
         node_match = re.match(r'\[node name="([^"]+)"', line)
         if node_match:
             if node_match.group(1) == node_name:

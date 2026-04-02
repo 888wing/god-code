@@ -4,16 +4,19 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Literal
 
 from pydantic import BaseModel
+
+from godot_agent.runtime.providers import infer_provider
 
 
 class AgentConfig(BaseModel):
     # API
     api_key: str = ""
     base_url: str = "https://api.openai.com/v1"
+    provider: str = "openai"
     model: str = "gpt-5.4"
+    reasoning_effort: str = "high"
     oauth_token: str | None = None
     max_turns: int = 20
     max_tokens: int = 16384  # gpt-5.4 supports up to 128K output
@@ -28,10 +31,12 @@ class AgentConfig(BaseModel):
     # UX
     language: str = "en"  # en, zh-TW, ja
     verbosity: str = "normal"  # concise, normal, detailed
+    mode: str = "apply"  # apply, plan, explain, review, fix
     safety: str = "normal"  # strict, normal, permissive
     token_budget: int = 0  # 0 = unlimited
     extra_prompt: str = ""  # Custom user instructions appended to system prompt
     streaming: bool = True
+    autosave_session: bool = True
 
     # Paths
     session_dir: str = ".agent_sessions"
@@ -45,7 +50,9 @@ def load_config(path: Path | None = None, use_codex: bool = False) -> AgentConfi
     env_map = {
         "GODOT_AGENT_API_KEY": "api_key",
         "GODOT_AGENT_BASE_URL": "base_url",
+        "GODOT_AGENT_PROVIDER": "provider",
         "GODOT_AGENT_MODEL": "model",
+        "GODOT_AGENT_REASONING_EFFORT": "reasoning_effort",
         "GODOT_AGENT_OAUTH_TOKEN": "oauth_token",
         "GODOT_AGENT_GODOT_PATH": "godot_path",
         "GODOT_AGENT_LANGUAGE": "language",
@@ -54,6 +61,12 @@ def load_config(path: Path | None = None, use_codex: bool = False) -> AgentConfi
         val = os.environ.get(env_key)
         if val is not None:
             setattr(config, field_name, val)
+
+    config.provider = infer_provider(
+        base_url=config.base_url,
+        model=config.model,
+        provider=config.provider,
+    )
 
     if not config.api_key and not config.oauth_token:
         from godot_agent.runtime.oauth import load_stored_token, load_codex_auth

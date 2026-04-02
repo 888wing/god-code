@@ -6,6 +6,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from godot_agent.tools.base import BaseTool, ToolResult
+from godot_agent.tools.file_ops import _validate_path
 
 
 class GrepTool(BaseTool):
@@ -25,9 +26,17 @@ class GrepTool(BaseTool):
     class Output(BaseModel):
         matches: list[dict]
 
+    def is_read_only(self) -> bool:
+        return True
+
+    def is_destructive(self) -> bool:
+        return False
+
     async def execute(self, input: Input) -> ToolResult:
         try:
-            root = Path(input.path)
+            root, err = _validate_path(input.path)
+            if err:
+                return ToolResult(error=err)
             regex = re.compile(input.pattern)
             matches: list[dict] = []
             for f in sorted(root.rglob(input.glob)):
@@ -61,9 +70,17 @@ class GlobTool(BaseTool):
     class Output(BaseModel):
         files: list[str]
 
+    def is_read_only(self) -> bool:
+        return True
+
+    def is_destructive(self) -> bool:
+        return False
+
     async def execute(self, input: Input) -> ToolResult:
         try:
-            root = Path(input.path)
+            root, err = _validate_path(input.path)
+            if err:
+                return ToolResult(error=err)
             files = sorted(
                 str(f) for f in root.glob(input.pattern) if f.is_file()
             )

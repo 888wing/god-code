@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, Field
 
 from godot_agent.tools.base import BaseTool, ToolResult
+from godot_agent.tools.file_ops import _validate_path
 
 _ISSUE_RE = re.compile(
     r"(ERROR|WARNING):\s*(res://[^:\s]+)(?::(\d+))?\s*-?\s*(.*)"
@@ -99,6 +100,12 @@ class RunGodotTool(BaseTool):
         errors: list[dict] = []
         warnings: list[dict] = []
 
+    def is_read_only(self) -> bool:
+        return True
+
+    def is_destructive(self) -> bool:
+        return False
+
     async def execute(self, input: Input) -> ToolResult:
         try:
             if input.command == "gut":
@@ -110,11 +117,15 @@ class RunGodotTool(BaseTool):
             else:
                 return ToolResult(error=f"Unknown command type: {input.command}")
 
+            project_path, err = _validate_path(input.project_path)
+            if err:
+                return ToolResult(error=err)
+
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=input.project_path,
+                cwd=str(project_path),
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=120

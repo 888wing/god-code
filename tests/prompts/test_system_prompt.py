@@ -33,3 +33,8 @@ class TestSystemPrompt:
     def test_no_project_godot(self, tmp_path):
         prompt = build_system_prompt(project_root=tmp_path)
         assert "No project.godot found" in prompt
+
+    def test_includes_mode_prompt(self, tmp_path):
+        (tmp_path / "project.godot").write_text("config_version=5\n")
+        prompt = build_system_prompt(project_root=tmp_path, mode="review")
+        assert "REVIEW mode" in prompt
