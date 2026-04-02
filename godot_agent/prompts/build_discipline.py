@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Build discipline rules injected into system prompt.
 
 Enforces incremental build-and-verify workflow to prevent

@@ -3,6 +3,7 @@
 Each section is a tuple of (title, keywords, content) for selective injection
 into the system prompt based on task context.
 """
+from __future__ import annotations
 
 SECTIONS: list[tuple[str, list[str], str]] = [
 
