@@ -195,7 +195,7 @@ def _run_setup_wizard() -> None:
     click.echo()
 
 
-_VERSION = "0.1.5"
+_VERSION = "0.2.0"
 
 
 def _check_update() -> None:
@@ -305,34 +305,49 @@ def ask(prompt: str, project: str, config: str | None, image: tuple[str, ...]):
 @click.option("--config", "-c", default=None, help="Path to config file")
 def chat(project: str = ".", config: str | None = None):
     """Start an interactive chat session."""
+    from rich.console import Console
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console()
     cfg = load_config(Path(config) if config else default_config_path())
     if not cfg.api_key and not cfg.oauth_token:
-        click.secho("Not configured. Run 'god-code setup' first.", fg="yellow", err=True)
+        console.print("[yellow]Not configured. Run 'god-code setup' first.[/]")
         raise SystemExit(1)
 
     project_root = Path(project).resolve()
     session_id = str(uuid.uuid4())[:8]
-
-    # Detect Godot project
     has_project = (project_root / "project.godot").exists()
 
-    click.echo()
-    click.secho("  God Code", fg="cyan", bold=True)
-    click.echo(f"  Session: {session_id}  |  Model: {cfg.model}")
+    # Welcome banner
+    console.print()
+    title = Text("God Code", style="bold cyan")
+    subtitle_parts = [f"Session: {session_id}", f"Model: {cfg.model}"]
     if has_project:
         from godot_agent.godot.project import parse_project_godot
         proj = parse_project_godot(project_root / "project.godot")
-        click.echo(f"  Project: {proj.name} ({project_root})")
+        subtitle_parts.append(f"Project: {proj.name}")
     else:
-        click.echo(f"  Working dir: {project_root}")
-        click.secho("  No project.godot found. Use /cd to navigate to a Godot project.", fg="yellow")
-    click.echo()
-    click.echo("  /cd <path>  — change project directory")
-    click.echo("  /info       — show project info")
-    click.echo("  /help       — show commands")
-    click.echo("  /save       — save session")
-    click.echo("  /quit       — exit")
-    click.echo()
+        subtitle_parts.append(f"Dir: {project_root.name}")
+    subtitle = Text(" | ".join(subtitle_parts), style="dim")
+    console.print(Panel(title, subtitle=subtitle, border_style="cyan", padding=(0, 2)))
+
+    if not has_project:
+        console.print("[yellow]  No project.godot found. Use /cd to navigate to a Godot project.[/]")
+
+    # Commands table
+    cmd_table = Table(show_header=False, box=None, padding=(0, 2), show_edge=False)
+    cmd_table.add_column(style="green")
+    cmd_table.add_column(style="dim")
+    cmd_table.add_row("/cd <path>", "change project directory")
+    cmd_table.add_row("/info", "show project details")
+    cmd_table.add_row("/status", "show model & auth")
+    cmd_table.add_row("/save", "save session")
+    cmd_table.add_row("/quit", "exit")
+    console.print(cmd_table)
+    console.print()
 
     engine = build_engine(cfg, project_root)
 
@@ -347,9 +362,7 @@ def chat(project: str = ".", config: str | None = None):
         try:
             while True:
                 try:
-                    user_input = click.prompt(
-                        click.style("you", fg="green"), prompt_suffix="> "
-                    )
+                    user_input = console.input("[green]you>[/] ")
                 except (EOFError, KeyboardInterrupt):
                     break
 
@@ -360,63 +373,75 @@ def chat(project: str = ".", config: str | None = None):
 
                 if cmd in ("/save", "save"):
                     path = save_session(cfg.session_dir, session_id, engine.messages)
-                    click.echo(f"  Session saved to {path}")
+                    console.print(f"  [dim]Session saved to {path}[/]")
                     continue
 
                 if cmd == "/help":
-                    click.echo("  /cd <path>  — change project directory")
-                    click.echo("  /info       — show project info")
-                    click.echo("  /save       — save session")
-                    click.echo("  /status     — show auth & model info")
-                    click.echo("  /quit       — exit")
+                    console.print(cmd_table)
                     continue
 
                 if cmd == "/info":
                     if has_project:
                         from godot_agent.godot.project import parse_project_godot
                         proj = parse_project_godot(project_root / "project.godot")
-                        click.echo(f"  Project:    {proj.name}")
-                        click.echo(f"  Version:    {proj.version}")
-                        click.echo(f"  Main Scene: {proj.main_scene}")
-                        click.echo(f"  Resolution: {proj.viewport_width}x{proj.viewport_height}")
-                        click.echo(f"  Autoloads:  {len(proj.autoloads)}")
+                        info_table = Table(show_header=False, box=None, padding=(0, 1))
+                        info_table.add_column(style="bold")
+                        info_table.add_column()
+                        info_table.add_row("Project", proj.name)
+                        info_table.add_row("Version", proj.version)
+                        info_table.add_row("Main Scene", proj.main_scene)
+                        info_table.add_row("Resolution", f"{proj.viewport_width}x{proj.viewport_height}")
+                        info_table.add_row("Autoloads", str(len(proj.autoloads)))
+                        console.print(Panel(info_table, title="Project Info", border_style="blue"))
                     else:
-                        click.secho(f"  No project.godot in {project_root}", fg="yellow")
+                        console.print(f"[yellow]  No project.godot in {project_root}[/]")
                     continue
 
                 if cmd == "/status":
-                    click.echo(f"  Model:   {cfg.model}")
-                    click.echo(f"  Project: {project_root}")
-                    click.echo(f"  Godot:   {cfg.godot_path}")
+                    st = Table(show_header=False, box=None, padding=(0, 1))
+                    st.add_column(style="bold")
+                    st.add_column()
+                    st.add_row("Model", cfg.model)
+                    st.add_row("Project", str(project_root))
+                    st.add_row("Godot", cfg.godot_path)
+                    auth = f"API key ({cfg.api_key[:8]}...)" if cfg.api_key else "OAuth" if cfg.oauth_token else "None"
+                    st.add_row("Auth", auth)
+                    console.print(Panel(st, title="Status", border_style="blue"))
                     continue
 
                 if user_input.strip().startswith("/cd "):
                     new_path = Path(user_input.strip()[4:]).expanduser().resolve()
                     if not new_path.exists():
-                        click.secho(f"  Path not found: {new_path}", fg="red")
+                        console.print(f"[red]  Path not found: {new_path}[/]")
                         continue
                     await engine.close()
                     engine = _rebuild_engine(new_path)
-                    has_godot = (new_path / "project.godot").exists()
-                    if has_godot:
+                    if (new_path / "project.godot").exists():
                         from godot_agent.godot.project import parse_project_godot
                         proj = parse_project_godot(new_path / "project.godot")
-                        click.secho(f"  Switched to: {proj.name} ({new_path})", fg="green")
+                        console.print(f"[green]  Switched to: {proj.name}[/] [dim]({new_path})[/]")
                     else:
-                        click.echo(f"  Working dir: {new_path}")
-                        click.secho("  No project.godot found here.", fg="yellow")
+                        console.print(f"  Working dir: {new_path}")
+                        console.print("[yellow]  No project.godot found here.[/]")
                     continue
 
-                # Regular message → send to LLM
-                response = await engine.submit(user_input)
-                click.echo()
-                click.echo(click.style("agent> ", fg="cyan") + response)
-                click.echo()
+                # Regular message → send to LLM with spinner
+                with console.status("[cyan]Thinking...[/]", spinner="dots"):
+                    response = await engine.submit(user_input)
+
+                console.print()
+                console.print(Panel(
+                    Markdown(response),
+                    title="[cyan]agent[/]",
+                    border_style="cyan",
+                    padding=(1, 2),
+                ))
+                console.print()
         finally:
             await engine.close()
 
     asyncio.run(_loop())
-    click.echo("Session ended.")
+    console.print("[dim]Session ended.[/]")
 
 
 @main.command()
