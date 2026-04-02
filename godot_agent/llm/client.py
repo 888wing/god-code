@@ -65,7 +65,7 @@ class Message:
 class LLMConfig:
     api_key: str
     base_url: str = "https://api.openai.com/v1"
-    model: str = "gpt-4o"
+    model: str = "gpt-5.4"
     oauth_token: str | None = None
     max_tokens: int = 4096
     temperature: float = 0.0

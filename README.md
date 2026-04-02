@@ -40,7 +40,7 @@ mkdir -p ~/.config/god-code
 cat > ~/.config/god-code/config.json << 'EOF'
 {
   "api_key": "sk-proj-your-key-here",
-  "model": "gpt-4o",
+  "model": "gpt-5.4",
   "godot_path": "/path/to/godot"
 }
 EOF
@@ -106,7 +106,7 @@ god-code logout   # Removes stored credentials
 {
   "api_key": "",
   "base_url": "https://api.openai.com/v1",
-  "model": "gpt-4o",
+  "model": "gpt-5.4",
   "oauth_token": null,
   "max_turns": 20,
   "max_tokens": 4096,

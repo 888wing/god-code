@@ -6,7 +6,7 @@ class TestLLMConfig:
     def test_default_config(self):
         config = LLMConfig(api_key="test-key")
         assert config.base_url == "https://api.openai.com/v1"
-        assert config.model == "gpt-4o"
+        assert config.model == "gpt-5.4"
 
     def test_custom_base_url(self):
         config = LLMConfig(api_key="key", base_url="http://localhost:11434/v1")

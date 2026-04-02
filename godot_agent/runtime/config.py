@@ -11,7 +11,7 @@ from pydantic import BaseModel
 class AgentConfig(BaseModel):
     api_key: str = ""
     base_url: str = "https://api.openai.com/v1"
-    model: str = "gpt-4o"
+    model: str = "gpt-5.4"
     oauth_token: str | None = None
     max_turns: int = 20
     max_tokens: int = 4096
