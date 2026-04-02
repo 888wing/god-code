@@ -702,7 +702,7 @@ def _run_setup_wizard(config_path: Path | None = None) -> None:
     click.echo()
 
 
-_VERSION = "0.5.3"
+_VERSION = "0.5.4"
 
 
 def _check_update() -> None:
