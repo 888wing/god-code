@@ -1,62 +1,55 @@
+"""System prompt builder with Playbook knowledge injection and build discipline."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
 from godot_agent.godot.project import parse_project_godot
+from godot_agent.prompts.build_discipline import BUILD_DISCIPLINE_PROMPT
+from godot_agent.prompts.knowledge_selector import format_knowledge_injection, select_sections
 
 
-def build_system_prompt(project_root: Path) -> str:
-    """Build the system prompt for the Godot coding agent.
+def build_system_prompt(
+    project_root: Path,
+    user_hint: str = "",
+    file_paths: list[str] | None = None,
+) -> str:
+    sections = [_core_identity()]
 
-    Combines core identity, Godot structural rules, project-specific context
-    parsed from project.godot, and the available tool catalog into a single
-    prompt string.
-    """
-    sections = [_core_identity(), _godot_rules()]
+    # Inject relevant Playbook knowledge based on context
+    knowledge_sections = select_sections(user_hint, file_paths, max_sections=4)
+    if knowledge_sections:
+        sections.append(format_knowledge_injection(knowledge_sections))
 
+    # Build discipline (always included)
+    sections.append(BUILD_DISCIPLINE_PROMPT)
+
+    # Project context
     project_file = project_root / "project.godot"
     if project_file.exists():
         proj = parse_project_godot(project_file)
         sections.append(_project_context(proj))
     else:
-        sections.append(
-            "## Project Context\n\nNo project.godot found in working directory."
-        )
+        sections.append("## Project Context\n\nNo project.godot found in working directory.")
 
     sections.append(_available_tools())
     return "\n\n".join(sections)
 
 
 def _core_identity() -> str:
-    return (
-        "# Godot Agent\n\n"
-        "You are a coding agent specialized for Godot game development. "
-        "You understand GDScript, .tscn scene files, .tres resources, shaders, "
-        "and the Godot engine architecture.\n\n"
-        "You have tools to read/write files, search code, run GUT tests, "
-        "take screenshots of scenes, and modify scene trees. "
-        "Use them to complete the user's request."
-    )
+    return """# God Code — Godot Game Development Agent
 
+You are an expert coding agent specialized for Godot 4.4 game development. You understand GDScript, .tscn scene files, .tres resources, shaders, and the Godot engine architecture deeply.
 
-def _godot_rules() -> str:
-    return (
-        "## Godot Structure Rules\n\n"
-        "1. **Visual properties in .tscn, logic in .gd** -- position, size, "
-        "color, font, texture belong in .tscn. State changes, event handling, "
-        "calculations belong in .gd.\n"
-        "2. **Never build UI node trees in _ready()** -- use the scene_writer "
-        "tool to modify .tscn files instead.\n"
-        "3. **Single .gd > 200 lines** -- consider extracting sub-scenes or "
-        "utility classes.\n"
-        "4. **Scene > 30 nodes** -- consider breaking into sub-scenes.\n"
-        "5. **Always read before edit** -- never modify files without reading "
-        "them first.\n"
-        "6. **Use res:// paths** -- all Godot resource references use res:// "
-        "prefix.\n"
-        "7. **Screenshot iteration** -- after visual changes, take a screenshot "
-        "to verify the result matches intent."
-    )
+You have tools to read/write files, search code, run GUT tests, take screenshots, modify scene trees, and execute shell commands. Use them to complete the user's request.
+
+## Core Principles
+
+1. **Composition over inheritance** — split features into small scenes, nest and combine them
+2. **Signal up, call down** — children emit signals, parents call children's methods
+3. **Data-driven design** — use Resource scripts and @export, not hardcoded values
+4. **Static typing** — annotate all variables, parameters, and return types
+5. **_physics_process for movement** — NEVER use _process for physics/collision logic"""
 
 
 def _project_context(proj) -> str:
@@ -72,19 +65,22 @@ def _project_context(proj) -> str:
     if proj.autoloads:
         lines.append("\n### Autoloads")
         for name, path in proj.autoloads.items():
-            lines.append(f"- `{name}` -> `{path}`")
+            lines.append(f"- `{name}` → `{path}`")
     return "\n".join(lines)
 
 
 def _available_tools() -> str:
-    return (
-        "## Available Tools\n\n"
-        "- **read_file** -- Read file contents (.gd, .tscn, .tres, .json, .gdshader)\n"
-        "- **write_file** -- Create or overwrite a file\n"
-        "- **edit_file** -- Replace a specific string in a file\n"
-        "- **grep** -- Search for patterns across files\n"
-        "- **glob** -- Find files by glob pattern\n"
-        "- **run_godot** -- Run GUT tests or validate scene loading\n"
-        "- **screenshot_scene** -- Capture a scene as PNG screenshot\n"
-        "- **git** -- Git operations (status, diff, commit, branch)"
-    )
+    return """## Available Tools
+
+- **read_file** — Read file contents (.gd, .tscn, .tres, .json, .gdshader)
+- **write_file** — Create or overwrite a file
+- **edit_file** — Replace a specific string in a file
+- **list_dir** — List directory contents with optional recursion
+- **grep** — Search for regex patterns across files
+- **glob** — Find files by glob pattern
+- **run_shell** — Execute shell commands
+- **run_godot** — Run GUT tests or validate scene loading (headless)
+- **screenshot_scene** — Capture a scene as PNG screenshot
+- **git** — Git operations (status, diff, commit, branch)
+
+After EVERY file creation/modification, run `run_godot validate` to check for errors."""
