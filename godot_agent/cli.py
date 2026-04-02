@@ -205,8 +205,8 @@ def main(ctx):
         if not _is_configured():
             _run_setup_wizard()
         else:
-            # No subcommand but already configured — show help
-            click.echo(ctx.get_help())
+            # No subcommand → enter interactive mode (like Claude Code)
+            ctx.invoke(chat)
 
 
 @main.command()
@@ -285,38 +285,111 @@ def ask(prompt: str, project: str, config: str | None, image: tuple[str, ...]):
 @main.command()
 @click.option("--project", "-p", default=".", help="Path to Godot project root")
 @click.option("--config", "-c", default=None, help="Path to config file")
-def chat(project: str, config: str | None):
+def chat(project: str = ".", config: str | None = None):
     """Start an interactive chat session."""
     cfg = load_config(Path(config) if config else default_config_path())
     if not cfg.api_key and not cfg.oauth_token:
         click.secho("Not configured. Run 'god-code setup' first.", fg="yellow", err=True)
         raise SystemExit(1)
+
     project_root = Path(project).resolve()
-    engine = build_engine(cfg, project_root)
     session_id = str(uuid.uuid4())[:8]
 
+    # Detect Godot project
+    has_project = (project_root / "project.godot").exists()
+
     click.echo()
-    click.secho(f"  God Code v0.1.0", fg="cyan", bold=True)
-    click.echo(f"  Session:  {session_id}")
-    click.echo(f"  Project:  {project_root}")
-    click.echo(f"  Model:    {cfg.model}")
+    click.secho("  God Code", fg="cyan", bold=True)
+    click.echo(f"  Session: {session_id}  |  Model: {cfg.model}")
+    if has_project:
+        from godot_agent.godot.project import parse_project_godot
+        proj = parse_project_godot(project_root / "project.godot")
+        click.echo(f"  Project: {proj.name} ({project_root})")
+    else:
+        click.echo(f"  Working dir: {project_root}")
+        click.secho("  No project.godot found. Use /cd to navigate to a Godot project.", fg="yellow")
     click.echo()
-    click.echo("  Commands: 'quit' to exit, 'save' to save session")
+    click.echo("  /cd <path>  — change project directory")
+    click.echo("  /info       — show project info")
+    click.echo("  /help       — show commands")
+    click.echo("  /save       — save session")
+    click.echo("  /quit       — exit")
     click.echo()
 
+    engine = build_engine(cfg, project_root)
+
+    def _rebuild_engine(new_root: Path) -> ConversationEngine:
+        nonlocal project_root, has_project
+        project_root = new_root.resolve()
+        has_project = (project_root / "project.godot").exists()
+        return build_engine(cfg, project_root)
+
     async def _loop() -> None:
+        nonlocal engine
         try:
             while True:
                 try:
-                    user_input = click.prompt(click.style("you", fg="green"), prompt_suffix="> ")
+                    user_input = click.prompt(
+                        click.style("you", fg="green"), prompt_suffix="> "
+                    )
                 except (EOFError, KeyboardInterrupt):
                     break
-                if user_input.strip().lower() == "quit":
+
+                cmd = user_input.strip().lower()
+
+                if cmd in ("/quit", "quit", "/exit", "exit"):
                     break
-                if user_input.strip().lower() == "save":
+
+                if cmd in ("/save", "save"):
                     path = save_session(cfg.session_dir, session_id, engine.messages)
                     click.echo(f"  Session saved to {path}")
                     continue
+
+                if cmd == "/help":
+                    click.echo("  /cd <path>  — change project directory")
+                    click.echo("  /info       — show project info")
+                    click.echo("  /save       — save session")
+                    click.echo("  /status     — show auth & model info")
+                    click.echo("  /quit       — exit")
+                    continue
+
+                if cmd == "/info":
+                    if has_project:
+                        from godot_agent.godot.project import parse_project_godot
+                        proj = parse_project_godot(project_root / "project.godot")
+                        click.echo(f"  Project:    {proj.name}")
+                        click.echo(f"  Version:    {proj.version}")
+                        click.echo(f"  Main Scene: {proj.main_scene}")
+                        click.echo(f"  Resolution: {proj.viewport_width}x{proj.viewport_height}")
+                        click.echo(f"  Autoloads:  {len(proj.autoloads)}")
+                    else:
+                        click.secho(f"  No project.godot in {project_root}", fg="yellow")
+                    continue
+
+                if cmd == "/status":
+                    click.echo(f"  Model:   {cfg.model}")
+                    click.echo(f"  Project: {project_root}")
+                    click.echo(f"  Godot:   {cfg.godot_path}")
+                    continue
+
+                if user_input.strip().startswith("/cd "):
+                    new_path = Path(user_input.strip()[4:]).expanduser().resolve()
+                    if not new_path.exists():
+                        click.secho(f"  Path not found: {new_path}", fg="red")
+                        continue
+                    await engine.close()
+                    engine = _rebuild_engine(new_path)
+                    has_godot = (new_path / "project.godot").exists()
+                    if has_godot:
+                        from godot_agent.godot.project import parse_project_godot
+                        proj = parse_project_godot(new_path / "project.godot")
+                        click.secho(f"  Switched to: {proj.name} ({new_path})", fg="green")
+                    else:
+                        click.echo(f"  Working dir: {new_path}")
+                        click.secho("  No project.godot found here.", fg="yellow")
+                    continue
+
+                # Regular message → send to LLM
                 response = await engine.submit(user_input)
                 click.echo()
                 click.echo(click.style("agent> ", fg="cyan") + response)
