@@ -1,7 +1,10 @@
 from __future__ import annotations
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 import httpx
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -109,7 +112,7 @@ class LLMClient:
             resp = await self._http.post(url, headers=headers, json=body)
             if resp.status_code == 429:
                 wait = min(2 ** attempt * 2, 30)
-                print(f"Rate limited, retrying in {wait}s... (attempt {attempt + 1}/5)")
+                log.warning("Rate limited, retrying in %ds (attempt %d/5)", wait, attempt + 1)
                 await _asyncio.sleep(wait)
                 continue
             resp.raise_for_status()

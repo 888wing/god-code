@@ -7,7 +7,7 @@ from godot_agent.runtime.config import AgentConfig, load_config
 class TestAgentConfig:
     def test_default_values(self):
         config = AgentConfig()
-        assert config.model == "gpt-5.4"
+        assert config.model == "gpt-4o"
         assert config.max_turns == 20
         assert config.screenshot_max_iterations == 5
 
@@ -28,7 +28,7 @@ class TestLoadConfig:
 
     def test_load_missing_file_returns_default(self, tmp_path):
         config = load_config(tmp_path / "nonexistent.json")
-        assert config.model == "gpt-5.4"
+        assert config.model == "gpt-4o"
         assert config.api_key == ""
 
     def test_env_override(self, tmp_path, monkeypatch):

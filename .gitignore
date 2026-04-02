@@ -5,3 +5,8 @@ dist/
 *.egg-info/
 .agent_sessions/
 .pytest_cache/
+auth.json
+.env
+*.pem
+.idea/
+.vscode/

@@ -42,6 +42,9 @@ def build_registry() -> ToolRegistry:
 
 
 def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
+    from godot_agent.tools.file_ops import set_project_root
+    set_project_root(project_root)
+
     llm_config = LLMConfig(
         api_key=config.api_key,
         base_url=config.base_url,
@@ -98,7 +101,7 @@ def status():
     click.echo(f"Model: {cfg.model}")
     click.echo(f"Base URL: {cfg.base_url}")
     if cfg.oauth_token:
-        click.echo(f"Auth: OAuth token ({cfg.oauth_token[:20]}...)")
+        click.echo(f"Auth: OAuth token ({cfg.oauth_token[:8]}...)")
     elif cfg.api_key:
         click.echo(f"Auth: API key ({cfg.api_key[:8]}...)")
     else:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 
 from pydantic import BaseModel, Field
 
@@ -29,7 +30,7 @@ class GitTool(BaseTool):
 
     async def execute(self, input: Input) -> ToolResult:
         try:
-            args = ["git"] + input.command.split()
+            args = ["git"] + shlex.split(input.command)
             proc = await asyncio.create_subprocess_exec(
                 *args,
                 stdout=asyncio.subprocess.PIPE,
