@@ -25,6 +25,8 @@ def test_prompt_assembler_includes_dynamic_context(tmp_path):
     assert "Fix the player movement" in prompt
     assert "scripts/player.gd" in prompt
     assert "validate_project" in prompt
+    assert "Active Skills" in prompt
+    assert "Physics Gameplay" in prompt
 
 
 def test_prompt_assembler_includes_quality_and_review_reports(tmp_path):
@@ -64,3 +66,15 @@ def test_prompt_assembler_includes_design_memory_impact_runtime_and_playtest(tmp
     assert "Change Impact Analysis" in prompt
     assert "Runtime Snapshot" in prompt
     assert "Playtest VERDICT: PASS" in prompt
+
+
+def test_prompt_assembler_includes_collision_skill_when_relevant(tmp_path):
+    (tmp_path / "project.godot").write_text('config_version=5\n\n[application]\nconfig/name="CollisionGame"\n')
+    assembler = PromptAssembler(PromptContext(project_root=tmp_path))
+
+    prompt = assembler.build(
+        user_hint="fix collision masks for enemy bullets",
+        file_paths=["scenes/bullet.tscn"],
+    )
+
+    assert "Collision Architecture" in prompt

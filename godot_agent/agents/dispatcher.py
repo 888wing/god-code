@@ -85,7 +85,8 @@ class AgentDispatcher:
             prompt_assembler=prompt_assembler,
             mode=config.mode,
         )
-        engine.allowed_tools = allowed_tools
+        engine.base_allowed_tools = set(allowed_tools)
+        engine.allowed_tools = set(allowed_tools)
         return engine
 
     async def run_planner(self, task: str) -> AgentTaskResult:

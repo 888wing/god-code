@@ -12,6 +12,13 @@ from prompt_toolkit.formatted_text import HTML
 from godot_agent.runtime.providers import PROVIDER_PRESETS, REASONING_EFFORT_LEVELS
 
 
+def _suffix_after_first_space(text: str) -> str:
+    if " " not in text:
+        return ""
+    parts = text.split(None, 1)
+    return parts[1] if len(parts) > 1 else ""
+
+
 class CommandCompleter(Completer):
     """Auto-complete for / commands and file paths."""
 
@@ -60,14 +67,14 @@ class CommandCompleter(Completer):
             return
 
         if text.startswith("/provider "):
-            prefix = text.split(None, 1)[1] if " " in text else ""
+            prefix = _suffix_after_first_space(text)
             for provider in PROVIDER_PRESETS:
                 if provider.startswith(prefix.lower()):
                     yield Completion(provider, start_position=-len(prefix))
             return
 
         if text.startswith("/effort "):
-            prefix = text.split(None, 1)[1] if " " in text else ""
+            prefix = _suffix_after_first_space(text)
             for effort in REASONING_EFFORT_LEVELS:
                 if effort.startswith(prefix.lower()):
                     yield Completion(effort, start_position=-len(prefix))
@@ -82,7 +89,7 @@ class CommandCompleter(Completer):
 
         # cd/path completion
         if text.startswith("cd ") or text.startswith("/cd "):
-            prefix = text.split(None, 1)[1] if " " in text else ""
+            prefix = _suffix_after_first_space(text)
             path = Path(prefix).expanduser()
             parent = path.parent if not path.is_dir() else path
             stem = path.name if not path.is_dir() else ""

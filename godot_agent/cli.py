@@ -104,6 +104,50 @@ def _has_meaningful_input(value: str) -> bool:
     return any(ch.isprintable() and not ch.isspace() for ch in value)
 
 
+def _command_argument(value: str, command: str) -> str | None:
+    stripped = value.strip()
+    if stripped == command:
+        return ""
+    prefix = f"{command} "
+    if not stripped.startswith(prefix):
+        return None
+    parts = stripped.split(None, 1)
+    return parts[1].strip() if len(parts) > 1 else ""
+
+
+def _set_arguments(value: str) -> tuple[str, str] | None:
+    stripped = value.strip()
+    if stripped == "/set":
+        return None
+    if not stripped.startswith("/set "):
+        return None
+    parts = stripped.split(None, 2)
+    if len(parts) != 3:
+        return None
+    return parts[1], parts[2]
+
+
+def _cd_argument(value: str) -> str | None:
+    for command in ("/cd", "cd"):
+        arg = _command_argument(value, command)
+        if arg is not None:
+            return arg
+    return None
+
+
+def _starts_multiline_input(value: str) -> bool:
+    return value.strip().startswith('"""')
+
+
+def _multiline_initial_fragment(value: str) -> str:
+    stripped = value.strip()
+    return stripped[3:] if stripped.startswith('"""') else ""
+
+
+def _is_multiline_terminator(value: str | None) -> bool:
+    return value is None or value.strip() == '"""'
+
+
 def build_registry() -> ToolRegistry:
     registry = ToolRegistry()
     for tool_cls in [
@@ -174,7 +218,8 @@ def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
         mode=config.mode,
         dispatcher=dispatcher,
     )
-    engine.allowed_tools = allowed_tools
+    engine.base_allowed_tools = set(allowed_tools)
+    engine.allowed_tools = set(allowed_tools)
     return engine
 
 
@@ -407,7 +452,7 @@ def _run_setup_wizard() -> None:
     click.echo()
 
 
-_VERSION = "0.5.0"
+_VERSION = "0.5.1"
 
 
 def _check_update() -> None:
@@ -690,7 +735,7 @@ def chat(project: str = ".", config: str | None = None):
                     if in_multiline:
                         from godot_agent.tui.input_handler import get_multiline_continuation_async
                         line = await get_multiline_continuation_async(input_session)
-                        if line is None or line.strip() == '"""':
+                        if _is_multiline_terminator(line):
                             in_multiline = False
                             user_input = "\n".join(multiline_buffer)
                             multiline_buffer = []
@@ -702,9 +747,9 @@ def chat(project: str = ".", config: str | None = None):
                         user_input = await get_input_async(input_session, completer, bottom_toolbar=_toolbar())
                         if user_input is None:
                             break
-                        if user_input.strip().startswith('"""'):
+                        if _starts_multiline_input(user_input):
                             in_multiline = True
-                            rest = user_input.strip()[3:]
+                            rest = _multiline_initial_fragment(user_input)
                             if rest:
                                 multiline_buffer.append(rest)
                             continue
@@ -727,10 +772,9 @@ def chat(project: str = ".", config: str | None = None):
 
                 if cmd in ("/load", "/resume", "resume"):
                     target = "latest"
-                elif stripped.startswith("/resume "):
-                    target = stripped.split(None, 1)[1].strip()
                 else:
-                    target = None
+                    resume_arg = _command_argument(user_input, "/resume")
+                    target = resume_arg or "latest" if resume_arg is not None else None
 
                 if target is not None:
                     record = (
@@ -803,13 +847,14 @@ def chat(project: str = ".", config: str | None = None):
                         display.error(f"No project.godot in {project_root}")
                     continue
 
-                if cmd == "/mode":
+                mode_arg = _command_argument(user_input, "/mode")
+                if cmd == "/mode" or mode_arg == "":
                     display.mode_panel(cfg.mode)
                     continue
 
-                if stripped.startswith("/mode "):
+                if mode_arg:
                     try:
-                        cfg.mode = normalize_mode(stripped.split(None, 1)[1])
+                        cfg.mode = normalize_mode(mode_arg)
                     except ValueError as e:
                         display.error(str(e))
                         continue
@@ -819,7 +864,8 @@ def chat(project: str = ".", config: str | None = None):
                     _refresh_workspace()
                     continue
 
-                if cmd == "/provider":
+                provider_arg = _command_argument(user_input, "/provider")
+                if cmd == "/provider" or provider_arg == "":
                     display.info_panel({
                         "Provider": cfg.provider,
                         "Base URL": cfg.base_url,
@@ -828,9 +874,9 @@ def chat(project: str = ".", config: str | None = None):
                     })
                     continue
 
-                if stripped.startswith("/provider "):
+                if provider_arg:
                     try:
-                        provider = _apply_provider_preset(cfg, stripped.split(None, 1)[1])
+                        provider = _apply_provider_preset(cfg, provider_arg)
                     except ValueError as e:
                         display.error(str(e))
                         continue
@@ -839,7 +885,8 @@ def chat(project: str = ".", config: str | None = None):
                     _refresh_workspace()
                     continue
 
-                if cmd == "/model":
+                model_arg = _command_argument(user_input, "/model")
+                if cmd == "/model" or model_arg == "":
                     display.info_panel({
                         "Provider": cfg.provider,
                         "Model": cfg.model,
@@ -847,10 +894,10 @@ def chat(project: str = ".", config: str | None = None):
                     })
                     continue
 
-                if stripped.startswith("/model "):
+                if model_arg is not None:
                     previous_provider = cfg.provider
                     previous_base_url = cfg.base_url
-                    cfg.model = stripped.split(None, 1)[1].strip()
+                    cfg.model = model_arg
                     if not cfg.model:
                         display.error("Usage: /model <name>")
                         continue
@@ -860,7 +907,8 @@ def chat(project: str = ".", config: str | None = None):
                     _refresh_workspace()
                     continue
 
-                if cmd == "/effort":
+                effort_arg = _command_argument(user_input, "/effort")
+                if cmd == "/effort" or effort_arg == "":
                     display.info_panel({
                         "Effort": cfg.reasoning_effort,
                         "Allowed": ", ".join(REASONING_EFFORT_LEVELS),
@@ -868,9 +916,11 @@ def chat(project: str = ".", config: str | None = None):
                     })
                     continue
 
-                if stripped.startswith("/effort "):
+                if effort_arg is not None:
                     try:
-                        cfg.reasoning_effort = _normalize_reasoning_effort(stripped.split(None, 1)[1])
+                        if not effort_arg:
+                            raise ValueError("Usage: /effort <level>")
+                        cfg.reasoning_effort = _normalize_reasoning_effort(effort_arg)
                     except ValueError as e:
                         display.error(str(e))
                         continue
@@ -910,82 +960,79 @@ def chat(project: str = ".", config: str | None = None):
                     display.settings_panel(cfg)
                     continue
 
-                if stripped.startswith("/set "):
-                    parts = stripped.split(None, 2)
-                    if len(parts) == 3:
-                        key, val = parts[1], parts[2]
-                        if hasattr(cfg, key):
-                            old_val = getattr(cfg, key)
-                            try:
-                                if key == "mode":
-                                    setattr(cfg, key, normalize_mode(val))
-                                elif key == "provider":
-                                    _apply_provider_preset(cfg, val)
-                                elif key == "reasoning_effort":
-                                    setattr(cfg, key, _normalize_reasoning_effort(val))
-                                elif key == "model":
-                                    previous_provider = cfg.provider
-                                    previous_base_url = cfg.base_url
-                                    setattr(cfg, key, val)
-                                    _sync_provider_from_model(cfg, previous_provider, previous_base_url)
-                                elif isinstance(old_val, bool):
-                                    setattr(cfg, key, val.lower() in ("true", "1", "yes", "on"))
-                                elif isinstance(old_val, int):
-                                    setattr(cfg, key, int(val))
-                                elif isinstance(old_val, float):
-                                    setattr(cfg, key, float(val))
-                                else:
-                                    setattr(cfg, key, val)
-                            except ValueError as e:
-                                display.error(str(e))
-                                continue
-
-                            display.success(f"{key} = {getattr(cfg, key)}")
-                            if key == "base_url":
-                                cfg.provider = infer_provider(
-                                    base_url=cfg.base_url,
-                                    model=cfg.model,
-                                    provider="",
-                                )
-
-                            if key in (
-                                "language",
-                                "verbosity",
-                                "extra_prompt",
-                                "auto_validate",
-                                "mode",
-                                "safety",
-                                "godot_path",
-                                "provider",
-                                "model",
-                                "base_url",
-                                "reasoning_effort",
-                                "api_key",
-                                "oauth_token",
-                                "max_tokens",
-                                "temperature",
-                            ):
-                                await _replace_engine(project_root, preserve_messages=True, rescan_project=False)
-                                display.info("Engine rebuilt with updated settings")
-                            else:
-                                _wire_engine_callbacks(engine, display, cfg)
-                            _refresh_workspace()
-                        else:
-                            display.error(f"Unknown setting: {key}")
-                    else:
+                set_args = _set_arguments(user_input)
+                if stripped == "/set" or set_args is not None:
+                    if set_args is None:
                         display.error("Usage: /set <key> <value>")
+                        continue
+                    key, val = set_args
+                    if hasattr(cfg, key):
+                        old_val = getattr(cfg, key)
+                        try:
+                            if key == "mode":
+                                setattr(cfg, key, normalize_mode(val))
+                            elif key == "provider":
+                                _apply_provider_preset(cfg, val)
+                            elif key == "reasoning_effort":
+                                setattr(cfg, key, _normalize_reasoning_effort(val))
+                            elif key == "model":
+                                previous_provider = cfg.provider
+                                previous_base_url = cfg.base_url
+                                setattr(cfg, key, val)
+                                _sync_provider_from_model(cfg, previous_provider, previous_base_url)
+                            elif isinstance(old_val, bool):
+                                setattr(cfg, key, val.lower() in ("true", "1", "yes", "on"))
+                            elif isinstance(old_val, int):
+                                setattr(cfg, key, int(val))
+                            elif isinstance(old_val, float):
+                                setattr(cfg, key, float(val))
+                            else:
+                                setattr(cfg, key, val)
+                        except ValueError as e:
+                            display.error(str(e))
+                            continue
+
+                        display.success(f"{key} = {getattr(cfg, key)}")
+                        if key == "base_url":
+                            cfg.provider = infer_provider(
+                                base_url=cfg.base_url,
+                                model=cfg.model,
+                                provider="",
+                            )
+
+                        if key in (
+                            "language",
+                            "verbosity",
+                            "extra_prompt",
+                            "auto_validate",
+                            "mode",
+                            "safety",
+                            "godot_path",
+                            "provider",
+                            "model",
+                            "base_url",
+                            "reasoning_effort",
+                            "api_key",
+                            "oauth_token",
+                            "max_tokens",
+                            "temperature",
+                        ):
+                            await _replace_engine(project_root, preserve_messages=True, rescan_project=False)
+                            display.info("Engine rebuilt with updated settings")
+                        else:
+                            _wire_engine_callbacks(engine, display, cfg)
+                        _refresh_workspace()
+                    else:
+                        display.error(f"Unknown setting: {key}")
                     continue
 
                 # Support both /cd and cd
-                cd_input = stripped
-                if cd_input.startswith("/cd "):
-                    cd_input = cd_input[4:]
-                elif cd_input.startswith("cd "):
-                    cd_input = cd_input[3:]
-                else:
-                    cd_input = None
+                cd_input = _cd_argument(user_input)
 
                 if cd_input is not None:
+                    if not cd_input:
+                        display.error("Usage: /cd <path>")
+                        continue
                     new_path = Path(cd_input).expanduser().resolve()
                     if not new_path.exists():
                         display.error(f"Path not found: {new_path}")

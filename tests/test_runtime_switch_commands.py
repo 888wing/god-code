@@ -1,7 +1,26 @@
+import random
+import string
+
 import pytest
 
-from godot_agent.cli import _apply_provider_preset, _normalize_reasoning_effort, _sync_provider_from_model
+from godot_agent.cli import (
+    _apply_provider_preset,
+    _cd_argument,
+    _command_argument,
+    _is_multiline_terminator,
+    _multiline_initial_fragment,
+    _normalize_reasoning_effort,
+    _set_arguments,
+    _starts_multiline_input,
+    _sync_provider_from_model,
+)
 from godot_agent.runtime.config import AgentConfig
+
+_RANDOM = random.Random(2026)
+_FUZZ_CASES = [
+    "".join(_RANDOM.choice(string.ascii_letters + string.digits + " /_\t\x7f-\"") for _ in range(length))
+    for length in range(0, 32)
+]
 
 
 def test_apply_provider_preset_updates_provider_defaults():
@@ -24,3 +43,111 @@ def test_sync_provider_from_model_updates_base_url_when_switching_family():
 def test_normalize_reasoning_effort_rejects_unknown_value():
     with pytest.raises(ValueError):
         _normalize_reasoning_effort("turbo")
+
+
+@pytest.mark.parametrize(
+    ("value", "command", "expected"),
+    [
+        ("/mode", "/mode", ""),
+        ("/mode   ", "/mode", ""),
+        ("/mode apply", "/mode", "apply"),
+        ("  /mode apply  ", "/mode", "apply"),
+        ("/provider anthropic", "/provider", "anthropic"),
+        ("/provider   anthropic  ", "/provider", "anthropic"),
+        ("/provider", "/provider", ""),
+        ("hello", "/provider", None),
+    ],
+)
+def test_command_argument_handles_partial_and_trailing_space(value: str, command: str, expected: str | None):
+    assert _command_argument(value, command) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("/set mode apply", ("mode", "apply")),
+        ("/set extra_prompt keep movement readable", ("extra_prompt", "keep movement readable")),
+        ("/set", None),
+        ("/set ", None),
+        ("/set mode", None),
+    ],
+)
+def test_set_arguments_are_parsed_safely(value: str, expected):
+    assert _set_arguments(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("cd /tmp/game", "/tmp/game"),
+        ("cd   /tmp/game  ", "/tmp/game"),
+        ("/cd /tmp/game", "/tmp/game"),
+        ("cd", ""),
+        ("cd ", ""),
+        ("/cd", ""),
+        ("/cd ", ""),
+        ("hello", None),
+    ],
+)
+def test_cd_argument_is_safe_for_empty_and_partial_input(value: str, expected: str | None):
+    assert _cd_argument(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "starts", "fragment"),
+    [
+        ('"""', True, ""),
+        ('"""hello', True, "hello"),
+        ('  """hello', True, "hello"),
+        ('""" hello', True, " hello"),
+        ('hello', False, ""),
+        (' "" ', False, ""),
+    ],
+)
+def test_multiline_helpers_parse_start_and_fragment(value: str, starts: bool, fragment: str):
+    assert _starts_multiline_input(value) is starts
+    assert _multiline_initial_fragment(value) == fragment
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, True),
+        ('"""', True),
+        ('  """  ', True),
+        ("", False),
+        ("text", False),
+    ],
+)
+def test_multiline_terminator_detection(value: str | None, expected: bool):
+    assert _is_multiline_terminator(value) is expected
+
+
+@pytest.mark.parametrize("value", _FUZZ_CASES)
+def test_command_parsing_helpers_do_not_crash_on_fuzz_input(value: str):
+    for command in ("/mode", "/provider", "/model", "/effort", "/resume", "/cd", "cd"):
+        result = _command_argument(value, command)
+        assert result is None or isinstance(result, str)
+
+    set_result = _set_arguments(value)
+    assert set_result is None or (isinstance(set_result, tuple) and len(set_result) == 2)
+
+    cd_result = _cd_argument(value)
+    assert cd_result is None or isinstance(cd_result, str)
+
+    assert isinstance(_starts_multiline_input(value), bool)
+    assert isinstance(_multiline_initial_fragment(value), str)
+    assert isinstance(_is_multiline_terminator(value), bool)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("/resume", ""),
+        ("/resume ", ""),
+        ("/resume latest", "latest"),
+        (" /resume latest ", "latest"),
+    ],
+)
+def test_resume_argument_parsing_is_safe(value: str, expected: str):
+    assert _command_argument(value, "/resume") == expected

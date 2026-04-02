@@ -4,15 +4,20 @@ AI coding agent specialized for Godot 4.4 game development. Unlike generic codin
 
 ## Features
 
-- **10 tools**: read/write/edit files, grep/glob search, git, shell, Godot headless runner, screenshot capture
-- **Workspace-style chat TUI**: session snapshot, recent activity timeline, live tool feedback, and validation visibility
-- **Interaction modes**: `apply`, `plan`, `explain`, `review`, and `fix` with mode-aware prompts and tool access
-- **Session recovery**: autosave, `/sessions`, `/resume`, and project-aware session metadata
+- **29 tools**: file ops, scene manipulation, script editing, search, git, shell, Godot headless runner, screenshot, AI sprite generation, web search
+- **AI sprite generation**: pixel art pipeline with chroma key removal, auto-crop, nearest-neighbor resize, style presets
+- **Structured Outputs**: strict JSON schemas for gpt-5+ models — zero tool call parse errors
+- **Web search**: query Godot docs and web when built-in knowledge isn't enough
+- **Workspace-style chat TUI**: session snapshot, activity timeline, live tool feedback, streaming output
+- **Interaction modes**: `apply`, `plan`, `explain`, `review`, `fix` with mode-aware prompts and tool access
+- **Multi-provider**: OpenAI (gpt-5.4), Anthropic (claude-sonnet-4.6), Google (gemini), xAI (grok), OpenRouter, local models
+- **Session recovery**: autosave, `/sessions`, `/resume`, project-aware session metadata
 - **Godot-native understanding**: project.godot parser, .tscn scene parser/writer/validator, collision layer planner
-- **Code quality**: GDScript linter (naming, ordering, type annotations), cross-file consistency checker, design pattern advisor
-- **Smart knowledge injection**: 17 Godot Playbook sections auto-selected by task context
-- **Build discipline**: incremental build-and-verify rules enforced via system prompt
-- **Vision support**: send screenshots + reference images to multimodal LLMs
+- **Code quality**: GDScript linter, cross-file consistency checker, design pattern advisor, impact analysis
+- **Smart knowledge injection**: 17 Godot Playbook sections auto-selected by task context + skill system
+- **Build discipline**: incremental build-and-verify with quality gates and automated review
+- **Security**: path containment, shell command blocking (3 safety levels), tool execution pipeline
+- **1.05M context window**: smart compression with working memory extraction at 75% threshold
 
 ## Install
 

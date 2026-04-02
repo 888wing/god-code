@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from godot_agent.godot.impact_analysis import ImpactAnalysisReport, analyze_change_impact
 from godot_agent.llm.client import LLMClient, Message, TokenUsage
 from godot_agent.prompts.assembler import PromptAssembler
+from godot_agent.prompts.skill_selector import narrow_tools_for_skills, select_skills
 from godot_agent.runtime.context_manager import smart_compact, estimate_message_tokens
 from godot_agent.runtime.design_memory import DesignMemory, load_design_memory
 from godot_agent.runtime.events import EngineEvent
@@ -143,7 +144,9 @@ class ConversationEngine:
 
         self.auto_commit = False
         self.use_streaming = False
+        self.base_allowed_tools: set[str] | None = None
         self.allowed_tools: set[str] | None = None
+        self.active_skills: list[str] = []
 
         # TUI callbacks
         self.on_tool_start: ToolStartCallback | None = None
@@ -168,6 +171,27 @@ class ConversationEngine:
             changeset=self.changeset,
             emit_event=lambda kind, message, data: self._emit_event(kind, message, **data),
         )
+
+    def _base_tool_scope(self) -> set[str] | None:
+        if self.base_allowed_tools is not None:
+            return set(self.base_allowed_tools)
+        if self.allowed_tools is not None:
+            self.base_allowed_tools = set(self.allowed_tools)
+            return set(self.allowed_tools)
+        return None
+
+    def _refresh_tool_scope(self) -> None:
+        base_scope = self._base_tool_scope()
+        skills = select_skills(self.last_user_input, self._recent_context_files(), max_skills=2)
+        narrowed = narrow_tools_for_skills(skills, base_scope)
+
+        self.active_skills = [skill.name for skill in skills]
+        self.allowed_tools = narrowed if narrowed is not None else base_scope
+        self._sync_registry_context()
+
+    def _current_openai_tools(self) -> list[dict] | None:
+        use_strict = getattr(getattr(self.client, "config", None), "model", "").startswith("gpt-5")
+        return self.registry.to_openai_tools(self.allowed_tools, strict=use_strict) or None
 
     def scan_project(self) -> ProjectScanSummary | None:
         """Auto-scan project for context. Returns summary or None."""
@@ -587,6 +611,7 @@ class ConversationEngine:
 
             if state.phase is LoopPhase.PREPARE_CONTEXT:
                 await self._maybe_compact()
+                self._refresh_tool_scope()
                 self._refresh_system_prompt()
                 self._emit_event(
                     "assistant_round_started",
@@ -597,6 +622,7 @@ class ConversationEngine:
                 continue
 
             if state.phase is LoopPhase.CALL_MODEL:
+                tools = self._current_openai_tools()
                 response, stream_active = await self._call_model(tools, use_streaming, turn)
                 state.pending_response = response
 
@@ -690,9 +716,7 @@ class ConversationEngine:
         await self._maybe_run_planner(user_input)
         self.messages.append(Message.user(user_input))
         self._emit_event("turn_started", user_input.splitlines()[0][:120], user_input=user_input)
-        use_strict = getattr(getattr(self.client, "config", None), "model", "").startswith("gpt-5")
-        tools = self.registry.to_openai_tools(self.allowed_tools, strict=use_strict) or None
-        return await self._run_loop(tools, use_streaming=self.use_streaming)
+        return await self._run_loop(None, use_streaming=self.use_streaming)
 
     async def submit_with_images(self, text: str, images_b64: list[str]) -> str:
         if not images_b64 and not _has_meaningful_text(text):
@@ -702,9 +726,7 @@ class ConversationEngine:
         await self._maybe_run_planner(text)
         self.messages.append(Message.user_with_images(text, images_b64))
         self._emit_event("turn_started", text.splitlines()[0][:120], user_input=text, images=len(images_b64))
-        use_strict = getattr(getattr(self.client, "config", None), "model", "").startswith("gpt-5")
-        tools = self.registry.to_openai_tools(self.allowed_tools, strict=use_strict) or None
-        return await self._run_loop(tools, use_streaming=self.use_streaming)
+        return await self._run_loop(None, use_streaming=self.use_streaming)
 
     async def close(self) -> None:
         await self.client.close()

@@ -9,6 +9,7 @@ from godot_agent.godot.impact_analysis import ImpactAnalysisReport, format_impac
 from godot_agent.godot.project import parse_project_godot
 from godot_agent.prompts.build_discipline import BUILD_DISCIPLINE_PROMPT
 from godot_agent.prompts.knowledge_selector import format_knowledge_injection, select_sections
+from godot_agent.prompts.skill_selector import format_skill_injection, select_skills
 from godot_agent.runtime.design_memory import DesignMemory, format_design_memory
 from godot_agent.runtime.modes import mode_prompt
 from godot_agent.runtime.playtest_harness import PlaytestReport, format_playtest_report
@@ -74,6 +75,10 @@ class PromptAssembler:
         playtest_report: PlaytestReport | None = None,
     ) -> str:
         sections = [self._static_prompt]
+
+        skills = select_skills(user_hint, file_paths, max_skills=2)
+        if skills:
+            sections.append(format_skill_injection(skills))
 
         knowledge_sections = select_sections(user_hint, file_paths, max_sections=4)
         if knowledge_sections:

@@ -4,7 +4,7 @@
 
 ## Project Identity
 
-**god-code** — a Python CLI agent that understands GDScript, .tscn scenes, collision layers, and Godot architecture patterns. It calls LLM APIs with Godot-specific tools and enforces incremental build-and-verify discipline.
+**god-code** — a Python CLI agent that understands GDScript, .tscn scenes, collision layers, and Godot architecture patterns. Multi-provider LLM support with 29 Godot-specific tools, AI sprite generation, and incremental build-and-verify discipline.
 
 **PyPI**: `pip install god-code`
 **GitHub**: https://github.com/888wing/god-code
@@ -12,204 +12,185 @@
 
 ## Tech Stack
 
-- **Language**: Python 3.12+
+- **Language**: Python 3.9+ (uses `from __future__ import annotations` for 3.10+ syntax)
 - **CLI**: click
 - **HTTP**: httpx (async)
-- **Models**: pydantic v2 (tool schemas, config)
-- **Image**: Pillow (screenshot encoding)
-- **Test**: pytest + pytest-asyncio
+- **Models**: pydantic v2 (tool schemas, config, structured outputs)
+- **Image**: Pillow (screenshot + sprite post-processing)
+- **TUI**: rich (panels, markdown, diff, tables, spinner) + prompt_toolkit (history, autocomplete)
+- **Test**: pytest + pytest-asyncio (383 tests)
 - **Build**: hatchling
 - **CI**: GitHub Actions (auto-publish to PyPI on tag)
 
-## Current Version: 0.1.0
+## Current Version: 0.5.1
 
-**Completed**: CLI (ask/chat/info/setup/login/logout/status), 10 tools, LLM client with OpenAI-compatible API, Godot Playbook knowledge system (17 sections), .tscn parser/writer/validator, GDScript linter, collision planner, dependency graph, pattern advisor, consistency checker, error loop, context manager, first-run setup wizard, PyPI published.
-
-**157 tests**, ~4,000 lines production code.
+**Stats**: 70 source files, 55 test files, ~11K lines, 383 tests, 29 tools.
 
 ## Architecture
 
 ```
 godot_agent/
-├── cli.py                        # Click CLI entry point + setup wizard
+├── cli.py                          # Click CLI + setup wizard + chat loop
+├── agents/                         # Multi-agent system
+│   ├── configs.py                  # Agent role configurations
+│   ├── dispatcher.py               # Planner/worker/reviewer dispatch
+│   └── results.py                  # Agent result types
 ├── runtime/
-│   ├── engine.py                 # Conversation loop (tool calling + context compaction + error loop)
-│   ├── config.py                 # AgentConfig (pydantic) + load from file/env
-│   ├── session.py                # Session persistence (.agent_sessions/*.json)
-│   ├── oauth.py                  # Codex refresh token flow
-│   ├── error_loop.py             # Godot output parsing + fix suggestions
-│   ├── context_manager.py        # Message compaction + file relevance scoring
-│   └── auth.py                   # AuthContext dataclass
+│   ├── engine.py                   # Conversation loop (tools, streaming, quality gates, review)
+│   ├── config.py                   # AgentConfig (pydantic) + env overrides
+│   ├── session.py                  # Session persistence with metadata
+│   ├── oauth.py                    # Codex refresh token flow
+│   ├── error_loop.py               # Godot output parsing + fix suggestions
+│   ├── context_manager.py          # Smart compression with working memory (1.05M context)
+│   ├── events.py                   # Engine event system for TUI
+│   ├── modes.py                    # Interaction modes (apply/plan/explain/review/fix)
+│   ├── providers.py                # Provider detection (openai/anthropic/gemini/xai/openrouter)
+│   ├── quality_gate.py             # Post-tool validation pipeline
+│   ├── reviewer.py                 # Automated code review
+│   ├── playtest_harness.py         # Automated gameplay testing
+│   ├── gameplay_reviewer.py        # Gameplay quality analysis
+│   ├── runtime_bridge.py           # Runtime state snapshots
+│   ├── design_memory.py            # Persistent design decisions
+│   └── auth.py                     # Auth context
 ├── llm/
-│   ├── client.py                 # LLMClient (OpenAI-compatible, retry, content filter handling)
-│   ├── streaming.py              # SSE streaming
-│   └── vision.py                 # Image → base64 encoding
-├── tools/                        # 10 function-calling tools
-│   ├── base.py                   # BaseTool ABC + ToolResult
-│   ├── registry.py               # ToolRegistry (register, execute, to_openai_tools)
-│   ├── file_ops.py               # read_file, write_file, edit_file (path-contained)
-│   ├── search.py                 # grep, glob
-│   ├── list_dir.py               # list_dir
-│   ├── git.py                    # git (shlex-parsed)
-│   ├── shell.py                  # run_shell (blocked patterns)
-│   ├── godot_cli.py              # run_godot (GUT, validate, output parser)
-│   └── screenshot.py             # screenshot_scene (headless)
-├── godot/                        # Godot-specific analysis
-│   ├── project.py                # project.godot parser → GodotProject
-│   ├── scene_parser.py           # .tscn → TscnScene (nodes, resources, connections)
-│   ├── scene_writer.py           # add_node, set_property, remove_node, add_connection
-│   ├── tscn_validator.py         # Format validation + auto-fix ordering
-│   ├── gdscript_linter.py        # Naming, ordering, type annotations, anti-patterns
-│   ├── collision_planner.py      # Standard 8-layer scheme
-│   ├── consistency_checker.py    # Cross-file collision/signal/resource/group checks
-│   ├── dependency_graph.py       # Project-wide scene→script→resource graph
-│   ├── pattern_advisor.py        # Object pool, component, state machine suggestions
-│   └── resource_validator.py     # res:// path existence check
-└── prompts/
-    ├── system.py                 # Builds system prompt (identity + knowledge + discipline + context)
-    ├── godot_playbook.py         # 17 indexed knowledge sections
-    ├── knowledge_selector.py     # Context-aware section scoring + injection
-    └── build_discipline.py       # Incremental build-and-verify rules
+│   ├── client.py                   # LLMClient with retry, content filter handling
+│   ├── types.py                    # Message, ToolCall, TokenUsage, ChatResponse, LLMConfig
+│   ├── streaming.py                # SSE streaming with tool call assembly
+│   ├── vision.py                   # Image encoding
+│   └── adapters/                   # Provider-specific adapters
+│       ├── base.py                 # Adapter interface
+│       ├── openai.py               # OpenAI/OpenRouter adapter
+│       └── anthropic.py            # Anthropic adapter
+├── tools/                          # 29 function-calling tools
+│   ├── base.py                     # BaseTool ABC (strict mode support)
+│   ├── registry.py                 # ToolRegistry with security pipeline
+│   ├── file_ops.py                 # read_file, write_file, edit_file (path-contained)
+│   ├── script_tools.py             # read_script, edit_script, lint_script
+│   ├── scene_tools.py              # read_scene, scene_tree, add/write/remove scene nodes
+│   ├── analysis_tools.py           # validate_project, check_consistency, dependency_graph, impact
+│   ├── search.py                   # grep, glob
+│   ├── list_dir.py                 # list_dir
+│   ├── git.py                      # git (shlex-parsed)
+│   ├── shell.py                    # run_shell (3 safety levels)
+│   ├── godot_cli.py                # run_godot (GUT, validate, output parser)
+│   ├── screenshot.py               # screenshot_scene (headless)
+│   ├── image_gen.py                # generate_sprite (AI pixel art + post-processing)
+│   ├── web_search.py               # web_search (Godot docs, web)
+│   ├── memory_tool.py              # design memory read/write
+│   └── editor_bridge.py            # runtime snapshot, playtest
+├── godot/                          # Godot-specific analysis
+│   ├── project.py                  # project.godot parser
+│   ├── scene_parser.py             # .tscn → TscnScene
+│   ├── scene_writer.py             # Structured .tscn modification
+│   ├── tscn_validator.py           # Format validation + auto-fix
+│   ├── gdscript_linter.py          # Style, naming, type annotations
+│   ├── collision_planner.py        # Standard 8-layer scheme
+│   ├── consistency_checker.py      # Cross-file checks
+│   ├── dependency_graph.py         # Project-wide file graph
+│   ├── pattern_advisor.py          # Design pattern suggestions
+│   ├── impact_analysis.py          # Change impact analysis
+│   └── resource_validator.py       # res:// path checks
+├── prompts/
+│   ├── system.py                   # Compatibility wrapper
+│   ├── assembler.py                # Full prompt assembly pipeline
+│   ├── godot_playbook.py           # 17 knowledge sections
+│   ├── knowledge_selector.py       # Context-aware section scoring
+│   ├── skill_library.py            # Skill definitions
+│   ├── skill_selector.py           # Dynamic skill activation
+│   ├── build_discipline.py         # Build-and-verify rules
+│   └── image_templates.py          # Pixel art prompt templates
+├── security/
+│   ├── classifier.py               # Tool risk classification
+│   ├── hooks.py                    # Pre/post execution hooks
+│   ├── policies.py                 # Execution context + policies
+│   ├── protected_paths.py          # Path protection rules
+│   └── tool_pipeline.py            # Tool execution pipeline
+├── testing/
+│   └── scenario_runner.py          # Automated test scenarios
+└── tui/
+    ├── display.py                  # Rich TUI components
+    └── input_handler.py            # prompt_toolkit input + autocomplete
 ```
 
 ## Key Patterns
 
 ### Tool System
-Every tool inherits `BaseTool` with pydantic `Input`/`Output` models. The registry auto-generates OpenAI function calling schemas.
+Every tool inherits `BaseTool`. Supports `strict` mode for GPT-5+ structured outputs. Security pipeline validates path containment and safety level before execution.
 
-```python
-class MyTool(BaseTool):
-    name = "my_tool"
-    description = "Does something"
-    class Input(BaseModel):
-        param: str = Field(description="...")
-    class Output(BaseModel):
-        result: str
-    async def execute(self, input: Input) -> ToolResult:
-        return ToolResult(output=self.Output(result="done"))
+### Provider Adapters
+`llm/adapters/` handles provider-specific request/response formats:
+- OpenAI: `max_completion_tokens` for gpt-5+, `max_tokens` for others
+- Anthropic: `thinking` budget for reasoning models
+- Gemini: `reasoning_effort` parameter
+
+### Engine Loop Phases
+```
+PREPARE_CONTEXT → CALL_MODEL → EXECUTE_TOOLS → RUN_QUALITY_GATE → RUN_REVIEWER → NEXT_ROUND → DONE
 ```
 
-Register in `cli.py:build_registry()`.
+### Context Management (1.05M window)
+Smart compression at 75% (787K tokens):
+1. Extract working memory (modified files, decisions, errors)
+2. Keep 20 recent messages intact
+3. Replace old turns with memory summary
+4. Tell LLM to re-read files if needed
 
-### Path Containment
-`file_ops.py` has a module-level `_project_root` set by CLI on startup. All read/write/edit operations validate paths are within project root. `set_project_root()` is called in `build_engine()`.
-
-### Engine Flow
-```
-user message → _maybe_compact() → client.chat() → tool_calls?
-  → yes: execute tools → _post_tool_validate() → loop
-  → no: return content
-```
-- Compaction triggers at ~80K estimated tokens
-- Post-tool validation runs `godot --headless --quit` after write_file/edit_file
-- Max tool rounds default: 20
-
-### Knowledge Injection
-`knowledge_selector.py` scores Playbook sections by keyword overlap with user prompt + file extensions. Top 4 sections injected (~2K tokens instead of full ~15K).
-
-### Error Loop Integration
-After any file-mutating tool call, engine runs Godot headless validation. If errors found, injects a system message telling the LLM to fix them before proceeding.
+### Interaction Modes
+- `apply`: Full tool access, write code
+- `plan`: Read-only tools, design first
+- `explain`: Read-only, educational
+- `review`: Read-only, quality analysis
+- `fix`: Full tools, error-focused
 
 ## Development Rules
 
-### CRITICAL: Read Before Modify
-Never modify files without reading them first. This applies to both god-code source AND Godot project files the agent operates on.
-
 ### Adding a New Tool
-1. Create `godot_agent/tools/your_tool.py` inheriting `BaseTool`
-2. Define `Input` and `Output` as pydantic `BaseModel`
-3. Implement `async execute()`
+1. Create in `godot_agent/tools/your_tool.py` inheriting `BaseTool`
+2. Define `Input`/`Output` as pydantic `BaseModel` (all fields must have defaults for strict mode)
+3. Implement `async execute()`, `is_read_only()`, `is_destructive()`
 4. Register in `cli.py:build_registry()`
-5. Add tests in `tests/tools/test_your_tool.py`
-6. Update README tool list
+5. Add to `prompts/system.py` active_tools list
+6. Add tests in `tests/tools/`
 
-### Adding Godot Knowledge
-Edit `godot_agent/prompts/godot_playbook.py`:
-- Each section: `(title, [keywords], content_string)`
-- Keywords drive auto-selection in `knowledge_selector.py`
-- Keep sections concise (~200 tokens each)
+### Adding a Provider
+1. Create adapter in `godot_agent/llm/adapters/`
+2. Register in `runtime/providers.py`
+3. Add detection rules (model prefix, base_url pattern)
 
-### Adding Godot Analysis
-New analyzers go in `godot_agent/godot/`. Follow existing patterns:
-- Pure functions, no side effects
-- Return structured dataclasses
-- Include `format_*()` for LLM-readable output
+## Config Reference
 
-### Config
-`~/.config/god-code/config.json` with `GODOT_AGENT_*` env overrides:
+`~/.config/god-code/config.json`:
 
-| Field | Default | Env Var |
-|-------|---------|---------|
-| api_key | "" | GODOT_AGENT_API_KEY |
-| base_url | https://api.openai.com/v1 | GODOT_AGENT_BASE_URL |
-| model | gpt-5.4 | GODOT_AGENT_MODEL |
-| godot_path | godot | GODOT_AGENT_GODOT_PATH |
-| oauth_token | null | GODOT_AGENT_OAUTH_TOKEN |
-
-OAuth client_id configurable via `GODOT_AGENT_OAUTH_CLIENT_ID`.
+| Field | Default | Description |
+|-------|---------|-------------|
+| api_key | "" | LLM API key |
+| provider | "openai" | openai, anthropic, gemini, xai, openrouter |
+| model | "gpt-5.4" | Model ID |
+| reasoning_effort | "high" | low, medium, high |
+| mode | "apply" | apply, plan, explain, review, fix |
+| language | "en" | en, zh-TW, ja, ko |
+| verbosity | "normal" | concise, normal, detailed |
+| auto_validate | true | Run Godot after file changes |
+| auto_commit | false | Suggest git commit |
+| token_budget | 0 | Max tokens (0=unlimited) |
+| safety | "normal" | strict, normal, permissive |
+| streaming | true | Stream responses |
+| extra_prompt | "" | Custom instructions |
 
 ## Testing
 
 ```bash
-# Full suite (157 tests)
-python -m pytest tests/ -v
-
-# Specific module
-python -m pytest tests/godot/test_tscn_validator.py -v
-
-# E2E with mocked LLM
-python -m pytest tests/test_e2e.py -v
+python -m pytest tests/ -v          # Full suite (383 tests)
+python -m pytest tests/tools/ -v    # Tool tests only
+python -m pytest tests/e2e/ -v      # E2E integration tests
 ```
 
-All tests use `tmp_path` fixture for isolation. LLM tests mock `httpx` responses. No real API calls in tests.
-
-## Release Process
-
-Automated via GitHub Actions:
+## Release
 
 ```bash
-# 1. Bump version in pyproject.toml
-# 2. Commit + tag
-git commit -am "release: v0.2.0"
-git tag v0.2.0
+# Bump version in pyproject.toml + cli.py _VERSION
+git commit -am "release: v0.5.1"
+git tag v0.5.1
 git push && git push --tags
-# → GitHub Actions runs tests → publishes to PyPI
+# → GitHub Actions auto-publishes to PyPI
 ```
-
-Requires `PYPI_API_TOKEN` in GitHub repo secrets.
-
-## Security Model
-
-- **File ops**: Restricted to project root (symlink-aware)
-- **Shell**: Blocked patterns (rm -rf /, sudo, curl|sh, etc.)
-- **Git**: shlex.split() for proper argument parsing
-- **API keys**: Stored with 600 permissions, masked in CLI output
-- **Content filter**: 400 errors retried, graceful fallback message
-
-## Roadmap
-
-### Phase 2: Editor Plugin Bridge
-- Godot EditorPlugin with WebSocket server
-- `editor_bridge.py` Python WebSocket client
-- Tier 1 operations: scene tree, properties, signals, run/stop game
-- Live viewport screenshots from editor
-
-### Phase 3: Hosted API
-- Cloudflare Worker proxy with Google OAuth
-- Free tier (50 req/day, gpt-4o-mini)
-- Pro tier ($12/mo, gpt-5.4 + vision)
-- Small model routing for simple tasks
-- Prompt caching for session continuity
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `pyproject.toml` | Package metadata, version, dependencies |
-| `CHANGELOG.md` | Version history |
-| `README.md` | User-facing documentation |
-| `CONTRIBUTING.md` | Contributor guide |
-| `.github/workflows/publish.yml` | Auto-publish to PyPI on tag |
-| `godot_agent/cli.py` | CLI commands + setup wizard |
-| `godot_agent/runtime/engine.py` | Core conversation loop |
-| `godot_agent/prompts/godot_playbook.py` | Godot knowledge base |

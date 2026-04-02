@@ -3,6 +3,7 @@ import json
 from unittest.mock import AsyncMock
 from godot_agent.runtime.engine import ConversationEngine
 from godot_agent.llm.client import Message, ToolCall, LLMClient, ChatResponse, TokenUsage
+from godot_agent.prompts.assembler import PromptAssembler, PromptContext
 from godot_agent.tools.registry import ToolRegistry
 from godot_agent.tools.base import BaseTool, ToolResult
 from pydantic import BaseModel
@@ -26,6 +27,26 @@ class EchoTool(BaseTool):
     Output = EchoOutput
     async def execute(self, input):
         return ToolResult(output=EchoOutput(reply=f"echo: {input.text}"))
+
+
+class NoopInput(BaseModel):
+    pass
+
+
+class NoopOutput(BaseModel):
+    ok: bool = True
+
+
+class NamedTool(BaseTool):
+    description = "Named tool for schema filtering tests"
+    Input = NoopInput
+    Output = NoopOutput
+
+    def __init__(self, name: str):
+        self.name = name
+
+    async def execute(self, input):
+        return ToolResult(output=NoopOutput())
 
 
 class TestConversationEngine:
@@ -126,6 +147,36 @@ class TestConversationEngine:
         await engine.submit("Hello")
         call_args = mock_client.chat.call_args
         assert call_args[0][1] is None or call_args[1].get("tools") is None
+
+    @pytest.mark.asyncio
+    async def test_collision_prompt_narrows_tools_before_model_call(self, tmp_path):
+        (tmp_path / "project.godot").write_text('config_version=5\n\n[application]\nconfig/name="SkillTest"\n')
+        mock_client = AsyncMock(spec=LLMClient)
+        mock_client.chat = AsyncMock(return_value=_resp(Message.assistant(content="Done")))
+        registry = ToolRegistry()
+        for name in ("read_scene", "write_scene_property", "edit_script", "run_shell"):
+            registry.register(NamedTool(name))
+        prompt_assembler = PromptAssembler(PromptContext(project_root=tmp_path, mode="apply"))
+        engine = ConversationEngine(
+            client=mock_client,
+            registry=registry,
+            system_prompt=prompt_assembler.build(),
+            project_path=str(tmp_path),
+            prompt_assembler=prompt_assembler,
+            auto_validate=False,
+            mode="apply",
+        )
+        engine.base_allowed_tools = {"read_scene", "write_scene_property", "edit_script", "run_shell"}
+        engine.allowed_tools = set(engine.base_allowed_tools)
+
+        await engine.submit("Fix collision masks for enemy bullets")
+
+        tool_schemas = mock_client.chat.call_args.args[1]
+        tool_names = {schema["function"]["name"] for schema in tool_schemas}
+        assert "read_scene" in tool_names
+        assert "write_scene_property" in tool_names
+        assert "edit_script" in tool_names
+        assert "run_shell" not in tool_names
 
     @pytest.mark.asyncio
     async def test_emits_runtime_events_for_tool_turn(self):
