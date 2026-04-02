@@ -1,6 +1,6 @@
 [project]
 name = "god-code"
-version = "0.5.4"
+version = "0.5.5"
 description = "AI coding agent specialized for Godot game development"
 requires-python = ">=3.9"
 license = {text = "GPL-3.0-or-later"}
@@ -16,6 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mcp = [
+    "mcp[cli]>=1.12",
+]
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",

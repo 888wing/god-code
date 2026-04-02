@@ -33,7 +33,7 @@ cd god-code
 pip install -e ".[dev]"
 ```
 
-Requires Python 3.12+.
+Requires Python 3.9+.
 
 ## Quick Start
 
@@ -189,6 +189,60 @@ God Code executes tools on your local machine. The LLM decides which tools to ca
 **Shell commands**: `run_shell` executes commands within the project directory. Review commands in the chat output before approving.
 
 **API keys**: Stored in `~/.config/god-code/config.json` with `600` permissions. Never committed to git.
+
+## MCP Server (for Claude Code / Codex / AI Agents)
+
+God Code can run as an MCP (Model Context Protocol) server, exposing 12 Godot tools directly to AI agents. **No LLM middleman, zero token cost** — tools run locally.
+
+### Install
+
+```bash
+pip install god-code[mcp]
+```
+
+### Configure in Claude Code
+
+Add to `~/.claude.json` or Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "god-code": {
+      "command": "god-code",
+      "args": ["mcp", "--project", "/path/to/your/godot/project"]
+    }
+  }
+}
+```
+
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `validate_project` | Run Godot headless validation, return errors/warnings |
+| `validate_tscn` | Check .tscn format, optionally auto-fix ordering |
+| `lint_script` | GDScript style, naming, type annotation checks |
+| `check_consistency` | Cross-file collision/signal/resource consistency |
+| `plan_collision` | Generate standard 8-layer collision config |
+| `analyze_dependencies` | Build project-wide dependency graph |
+| `suggest_patterns` | Object pool, component, state machine suggestions |
+| `parse_scene` | Parse .tscn into structured node tree |
+| `project_info` | Read project.godot metadata |
+| `godot_knowledge` | Query Godot 4.4 Playbook (17 knowledge sections) |
+| `generate_sprite` | AI pixel art generation + post-processing |
+| `validate_resources` | Check all res:// paths exist |
+
+### How it works
+
+```
+Claude Code / Codex
+    ↓ (MCP protocol over stdio)
+god-code mcp process (local)
+    ↓ (direct function calls)
+Godot analysis tools (no LLM needed)
+```
+
+The AI agent gets Godot-native intelligence without you paying for an extra LLM layer.
 
 ## Architecture
 

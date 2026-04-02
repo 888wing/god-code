@@ -86,8 +86,8 @@ def _module_uses_dataclass_slots(module: ast.Module) -> bool:
 
 
 def test_requires_python_matches_documented_floor() -> None:
-    assert _declared_min_python() == (3, 12)
-    assert "Requires Python 3.12+." in README_PATH.read_text(encoding="utf-8")
+    assert _declared_min_python() == (3, 9)
+    assert "Python 3.9+" in README_PATH.read_text(encoding="utf-8")
 
 
 def test_declared_python_floor_covers_runtime_features() -> None:

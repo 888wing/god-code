@@ -702,7 +702,7 @@ def _run_setup_wizard(config_path: Path | None = None) -> None:
     click.echo()
 
 
-_VERSION = "0.5.4"
+_VERSION = "0.5.5"
 
 
 def _check_update() -> None:
@@ -1655,6 +1655,29 @@ def info(project: str):
     click.echo(f"Autoloads:  {len(proj.autoloads)}")
     for name, path in proj.autoloads.items():
         click.echo(f"  {name} -> {path}")
+
+
+@main.command("mcp")
+@click.option("--project", "-p", default=".", help="Path to Godot project root")
+def mcp_command(project: str):
+    """Start MCP server (for Claude Code, Codex, and other AI agents).
+
+    Exposes god-code's Godot tools via Model Context Protocol over stdio.
+    No LLM needed — tools run locally, zero token cost.
+
+    Configure in Claude Code:
+    \b
+    {
+      "mcpServers": {
+        "god-code": {
+          "command": "god-code",
+          "args": ["mcp", "--project", "/path/to/project"]
+        }
+      }
+    }
+    """
+    from godot_agent.mcp_server import run_mcp_server
+    run_mcp_server(project_path=project)
 
 
 if __name__ == "__main__":
