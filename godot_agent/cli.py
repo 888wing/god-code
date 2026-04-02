@@ -195,17 +195,35 @@ def _run_setup_wizard() -> None:
     click.echo()
 
 
+_VERSION = "0.1.5"
+
+
+def _check_update() -> None:
+    """Check PyPI for a newer version. Non-blocking, fails silently."""
+    try:
+        import httpx as _httpx
+        resp = _httpx.get("https://pypi.org/pypi/god-code/json", timeout=3)
+        if resp.status_code == 200:
+            latest = resp.json()["info"]["version"]
+            if latest != _VERSION:
+                click.secho(f"  Update available: {_VERSION} → {latest}", fg="yellow")
+                click.echo(f"  Run: pip install --upgrade god-code")
+                click.echo()
+    except Exception:
+        pass
+
+
 @click.group(invoke_without_command=True)
-@click.version_option(version="0.1.0")
+@click.version_option(version=_VERSION)
 @click.pass_context
 def main(ctx):
     """God Code -- AI coding assistant for Godot game development."""
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
+    _check_update()
     if ctx.invoked_subcommand is None:
         if not _is_configured():
             _run_setup_wizard()
         else:
-            # No subcommand → enter interactive mode (like Claude Code)
             ctx.invoke(chat)
 
 
