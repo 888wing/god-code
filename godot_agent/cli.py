@@ -452,7 +452,7 @@ def _run_setup_wizard() -> None:
     click.echo()
 
 
-_VERSION = "0.5.1"
+_VERSION = "0.5.2"
 
 
 def _check_update() -> None:
