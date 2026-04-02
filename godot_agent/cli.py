@@ -75,7 +75,7 @@ def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
     )
     client = LLMClient(llm_config)
     registry = build_registry()
-    system_prompt = build_system_prompt(project_root)
+    system_prompt = build_system_prompt(project_root, godot_path=config.godot_path)
     return ConversationEngine(
         client=client,
         registry=registry,
@@ -195,7 +195,7 @@ def _run_setup_wizard() -> None:
     click.echo()
 
 
-_VERSION = "0.2.0"
+_VERSION = "0.2.1"
 
 
 def _check_update() -> None:
@@ -409,8 +409,17 @@ def chat(project: str = ".", config: str | None = None):
                     console.print(Panel(st, title="Status", border_style="blue"))
                     continue
 
-                if user_input.strip().startswith("/cd "):
-                    new_path = Path(user_input.strip()[4:]).expanduser().resolve()
+                # Support both /cd and cd
+                cd_input = user_input.strip()
+                if cd_input.startswith("/cd "):
+                    cd_input = cd_input[4:]
+                elif cd_input.startswith("cd "):
+                    cd_input = cd_input[3:]
+                else:
+                    cd_input = None
+
+                if cd_input is not None:
+                    new_path = Path(cd_input).expanduser().resolve()
                     if not new_path.exists():
                         console.print(f"[red]  Path not found: {new_path}[/]")
                         continue

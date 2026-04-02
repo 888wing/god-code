@@ -13,6 +13,7 @@ def build_system_prompt(
     project_root: Path,
     user_hint: str = "",
     file_paths: list[str] | None = None,
+    godot_path: str = "godot",
 ) -> str:
     sections = [_core_identity()]
 
@@ -28,7 +29,7 @@ def build_system_prompt(
     project_file = project_root / "project.godot"
     if project_file.exists():
         proj = parse_project_godot(project_file)
-        sections.append(_project_context(proj, project_root))
+        sections.append(_project_context(proj, project_root, godot_path))
     else:
         sections.append("## Project Context\n\nNo project.godot found in working directory.")
 
@@ -52,11 +53,13 @@ You have tools to read/write files, search code, run GUT tests, take screenshots
 5. **_physics_process for movement** — NEVER use _process for physics/collision logic"""
 
 
-def _project_context(proj, project_root: Path | None = None) -> str:
+def _project_context(proj, project_root: Path | None = None, godot_path: str = "godot") -> str:
     lines = ["## Project Context", ""]
     if project_root:
         lines.append(f"- **Project Root**: `{project_root}`")
         lines.append(f"  Use this absolute path for ALL tool calls (read_file, glob, grep, etc.)")
+    lines.append(f"- **Godot Path**: `{godot_path}`")
+    lines.append(f"  Use this path for run_godot tool's godot_path parameter.")
     lines.append(f"- **Project**: {proj.name}")
     if proj.version:
         lines.append(f"- **Version**: {proj.version}")
