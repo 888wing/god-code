@@ -54,10 +54,15 @@ class ConversationEngine:
         self.session_api_calls = 0
         self.last_turn: TurnStats | None = None
 
+        self.auto_commit = False
+        self.use_streaming = False
+
         # TUI callbacks
         self.on_tool_start: ToolStartCallback | None = None
         self.on_tool_end: ToolEndCallback | None = None
         self.on_diff: DiffCallback | None = None
+        self.on_stream_chunk: Callable[[str], None] | None = None
+        self.on_commit_suggest: Callable[[], None] | None = None
 
     def scan_project(self) -> str | None:
         """Auto-scan project for context. Returns summary or None."""
@@ -127,12 +132,21 @@ class ConversationEngine:
             return args.get("command", "")[:40]
         return ""
 
-    async def _run_loop(self, tools: list[dict] | None) -> str:
+    async def _run_loop(self, tools: list[dict] | None, use_streaming: bool = False) -> str:
         turn = TurnStats()
 
         for _ in range(self.max_tool_rounds + 1):
             await self._maybe_compact()
-            chat_resp: ChatResponse = await self.client.chat(self.messages, tools)
+
+            # Use streaming for the final text response (no tool calls expected after tools done)
+            if use_streaming and self.on_stream_chunk:
+                from godot_agent.llm.streaming import stream_chat_with_callback
+                chat_resp = await stream_chat_with_callback(
+                    self.client, self.messages, tools,
+                    on_chunk=self.on_stream_chunk,
+                )
+            else:
+                chat_resp = await self.client.chat(self.messages, tools)
             response = chat_resp.message
 
             turn.usage = turn.usage + chat_resp.usage
@@ -198,13 +212,18 @@ class ConversationEngine:
                     f"Fix the errors before proceeding."
                 ))
 
+            # Auto-commit suggestion after successful file mutations
+            if self.auto_commit and (tool_names_used & _FILE_MUTATING_TOOLS) and not validation_report:
+                if self.on_commit_suggest:
+                    self.on_commit_suggest()
+
         self.last_turn = turn
         return "Tool call limit reached. Please simplify the request."
 
     async def submit(self, user_input: str) -> str:
         self.messages.append(Message.user(user_input))
         tools = self.registry.to_openai_tools() or None
-        return await self._run_loop(tools)
+        return await self._run_loop(tools, use_streaming=self.use_streaming)
 
     async def submit_with_images(self, text: str, images_b64: list[str]) -> str:
         self.messages.append(Message.user_with_images(text, images_b64))

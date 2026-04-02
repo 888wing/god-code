@@ -35,3 +35,24 @@ def load_session(session_dir: str, session_id: str) -> list[dict] | None:
         return None
     data = json.loads(file_path.read_text())
     return data.get("messages", [])
+
+
+def load_latest_session(session_dir: str) -> tuple[str, list[Message]] | None:
+    """Load the most recent session. Returns (session_id, messages) or None."""
+    dir_path = Path(session_dir)
+    if not dir_path.exists():
+        return None
+    files = sorted(dir_path.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    if not files:
+        return None
+    data = json.loads(files[0].read_text())
+    session_id = data.get("session_id", files[0].stem)
+    raw_messages = data.get("messages", [])
+    messages: list[Message] = []
+    for m in raw_messages:
+        messages.append(Message(
+            role=m.get("role", "user"),
+            content=m.get("content"),
+            tool_call_id=m.get("tool_call_id"),
+        ))
+    return session_id, messages

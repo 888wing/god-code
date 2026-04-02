@@ -63,7 +63,9 @@ def build_registry() -> ToolRegistry:
 
 def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
     from godot_agent.tools.file_ops import set_project_root
+    from godot_agent.tools.shell import set_safety_level
     set_project_root(project_root)
+    set_safety_level(config.safety)
 
     llm_config = LLMConfig(
         api_key=config.api_key,
@@ -202,7 +204,7 @@ def _run_setup_wizard() -> None:
     click.echo()
 
 
-_VERSION = "0.4.0"
+_VERSION = "0.4.1"
 
 
 def _check_update() -> None:
@@ -343,6 +345,15 @@ def chat(project: str = ".", config: str | None = None):
     engine.on_tool_start = lambda name, args: display.tool_start(name, engine._summarize_args(name, args))
     engine.on_tool_end = lambda name, ok, err: display.tool_result(name, ok, err)
     engine.on_diff = lambda old, new, fn: display.show_diff(old, new, fn)
+    engine.auto_commit = cfg.auto_commit
+    engine.use_streaming = cfg.streaming
+
+    # Streaming callback
+    if cfg.streaming:
+        engine.on_stream_chunk = lambda chunk: display.agent_streaming_chunk(chunk)
+
+    # Auto-commit callback
+    engine.on_commit_suggest = lambda: display.info("Changes made. Run 'git add -A && git commit' to save.")
 
     # Auto-scan project on entry
     if has_project:
@@ -350,8 +361,15 @@ def chat(project: str = ".", config: str | None = None):
         if scan_result:
             display.info(f"Project auto-scanned: {scan_result}")
 
+    # Setup prompt_toolkit for history + autocomplete
+    from godot_agent.tui.input_handler import CommandCompleter, create_session as create_input_session
+    history_file = str(Path.home() / ".config" / "god-code" / "history")
+    Path(history_file).parent.mkdir(parents=True, exist_ok=True)
+    input_session = create_input_session(history_file)
+    completer = CommandCompleter(project_root)
+
     def _rebuild_engine(new_root: Path) -> ConversationEngine:
-        nonlocal project_root, has_project, proj_name
+        nonlocal project_root, has_project, proj_name, completer
         project_root = new_root.resolve()
         has_project = (project_root / "project.godot").exists()
         if has_project:
@@ -363,6 +381,12 @@ def chat(project: str = ".", config: str | None = None):
         eng.on_tool_start = lambda name, args: display.tool_start(name, eng._summarize_args(name, args))
         eng.on_tool_end = lambda name, ok, err: display.tool_result(name, ok, err)
         eng.on_diff = lambda old, new, fn: display.show_diff(old, new, fn)
+        eng.auto_commit = cfg.auto_commit
+        eng.use_streaming = cfg.streaming
+        if cfg.streaming:
+            eng.on_stream_chunk = lambda chunk: display.agent_streaming_chunk(chunk)
+        eng.on_commit_suggest = lambda: display.info("Changes made. Run 'git add -A && git commit' to save.")
+        completer = CommandCompleter(project_root)
         if has_project:
             eng.scan_project()
         return eng
@@ -376,8 +400,9 @@ def chat(project: str = ".", config: str | None = None):
             while True:
                 try:
                     if in_multiline:
-                        line = display.console.input("[dim]...[/] ")
-                        if line.strip() == '"""':
+                        from godot_agent.tui.input_handler import get_multiline_continuation
+                        line = get_multiline_continuation(input_session)
+                        if line is None or line.strip() == '"""':
                             in_multiline = False
                             user_input = "\n".join(multiline_buffer)
                             multiline_buffer = []
@@ -385,7 +410,10 @@ def chat(project: str = ".", config: str | None = None):
                             multiline_buffer.append(line)
                             continue
                     else:
-                        user_input = display.console.input("[green]you>[/] ")
+                        from godot_agent.tui.input_handler import get_input
+                        user_input = get_input(input_session, completer)
+                        if user_input is None:
+                            break
                         if user_input.strip().startswith('"""'):
                             in_multiline = True
                             rest = user_input.strip()[3:]
@@ -406,17 +434,12 @@ def chat(project: str = ".", config: str | None = None):
                     continue
 
                 if cmd == "/load":
-                    from godot_agent.runtime.session import load_session as _load_sess
-                    import os
-                    sess_dir = cfg.session_dir
-                    if os.path.exists(sess_dir):
-                        files = sorted(Path(sess_dir).glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
-                        if files:
-                            display.info(f"Loading: {files[0].name}")
-                            # Note: restore is informational — messages are raw dicts
-                            display.success("Session history loaded for context")
-                        else:
-                            display.error("No saved sessions found")
+                    from godot_agent.runtime.session import load_latest_session
+                    result = load_latest_session(cfg.session_dir)
+                    if result:
+                        old_id, old_messages = result
+                        engine.messages.extend(old_messages[1:])  # Skip system prompt
+                        display.success(f"Restored session {old_id} ({len(old_messages)} messages)")
                     else:
                         display.error("No saved sessions found")
                     continue
@@ -518,13 +541,17 @@ def chat(project: str = ".", config: str | None = None):
 
                 # Regular message → send to LLM
                 try:
-                    with display.thinking():
+                    if cfg.streaming and engine.on_stream_chunk:
+                        display.agent_streaming_start()
                         response = await engine.submit(user_input)
+                        display.agent_streaming_end()
+                    else:
+                        with display.thinking():
+                            response = await engine.submit(user_input)
+                        display.agent_response(response)
                 except KeyboardInterrupt:
                     display.info("Cancelled")
                     continue
-
-                display.agent_response(response)
 
                 # Token usage
                 turn = engine.last_turn
