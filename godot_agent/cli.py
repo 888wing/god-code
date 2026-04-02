@@ -195,7 +195,7 @@ def _run_setup_wizard() -> None:
     click.echo()
 
 
-_VERSION = "0.2.2"
+_VERSION = "0.3.0"
 
 
 def _check_update() -> None:
@@ -345,6 +345,7 @@ def chat(project: str = ".", config: str | None = None):
     cmd_table.add_row("/cd <path>", "change project directory")
     cmd_table.add_row("/info", "show project details")
     cmd_table.add_row("/status", "show model & auth")
+    cmd_table.add_row("/usage", "show token usage & cost")
     cmd_table.add_row("/save", "save session")
     cmd_table.add_row("/quit", "exit")
     console.print(cmd_table)
@@ -398,6 +399,20 @@ def chat(project: str = ".", config: str | None = None):
                         console.print(f"[yellow]  No project.godot in {project_root}[/]")
                     continue
 
+                if cmd == "/usage":
+                    sess = engine.session_usage
+                    cost = sess.cost_estimate(cfg.model)
+                    usage_table = Table(show_header=False, box=None, padding=(0, 1))
+                    usage_table.add_column(style="bold")
+                    usage_table.add_column()
+                    usage_table.add_row("Input tokens", f"{sess.prompt_tokens:,}")
+                    usage_table.add_row("Output tokens", f"{sess.completion_tokens:,}")
+                    usage_table.add_row("Total tokens", f"{sess.total_tokens:,}")
+                    usage_table.add_row("API calls", str(engine.session_api_calls))
+                    usage_table.add_row("Est. cost", f"${cost:.4f}")
+                    console.print(Panel(usage_table, title="Usage", border_style="blue"))
+                    continue
+
                 if cmd == "/status":
                     st = Table(show_header=False, box=None, padding=(0, 1))
                     st.add_column(style="bold")
@@ -446,12 +461,41 @@ def chat(project: str = ".", config: str | None = None):
                     border_style="cyan",
                     padding=(1, 2),
                 ))
+
+                # Show token usage
+                turn = engine.last_turn
+                sess = engine.session_usage
+                if turn:
+                    cost_turn = turn.usage.cost_estimate(cfg.model)
+                    cost_sess = sess.cost_estimate(cfg.model)
+                    tools_str = f"  tools: {', '.join(turn.tools_called)}" if turn.tools_called else ""
+                    console.print(
+                        f"  [dim]tokens: {turn.usage.total_tokens:,} "
+                        f"(in:{turn.usage.prompt_tokens:,} out:{turn.usage.completion_tokens:,}) "
+                        f"~${cost_turn:.4f}"
+                        f"{tools_str}[/]"
+                    )
+                    console.print(
+                        f"  [dim]session: {sess.total_tokens:,} tokens "
+                        f"| {engine.session_api_calls} API calls "
+                        f"| ~${cost_sess:.4f} total[/]"
+                    )
                 console.print()
         finally:
             await engine.close()
 
     asyncio.run(_loop())
-    console.print("[dim]Session ended.[/]")
+    # Session summary
+    sess = engine.session_usage
+    cost = sess.cost_estimate(cfg.model)
+    console.print()
+    console.print(Panel(
+        f"Tokens: {sess.total_tokens:,} (in:{sess.prompt_tokens:,} out:{sess.completion_tokens:,})\n"
+        f"API calls: {engine.session_api_calls}\n"
+        f"Estimated cost: ${cost:.4f}",
+        title="[dim]Session Summary[/]",
+        border_style="dim",
+    ))
 
 
 @main.command()

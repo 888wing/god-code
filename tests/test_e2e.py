@@ -12,7 +12,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from godot_agent.llm.client import LLMClient, Message, ToolCall
+from godot_agent.llm.client import LLMClient, Message, ToolCall, ChatResponse, TokenUsage
+
+
+def _resp(msg: Message) -> ChatResponse:
+    return ChatResponse(message=msg, usage=TokenUsage())
 from godot_agent.prompts.system import build_system_prompt
 from godot_agent.runtime.engine import ConversationEngine
 from godot_agent.tools.file_ops import EditFileTool, ReadFileTool, WriteFileTool
@@ -84,7 +88,7 @@ class TestE2EReadAndEdit:
         final = Message.assistant(content="Done! Changed speed from 100 to 200.")
 
         mock_client = AsyncMock(spec=LLMClient)
-        mock_client.chat = AsyncMock(side_effect=[read_call, edit_call, final])
+        mock_client.chat = AsyncMock(side_effect=[_resp(read_call), _resp(edit_call), _resp(final)])
 
         engine = _make_engine(godot_project, mock_client)
         result = await engine.submit("Change player speed to 200")
@@ -118,7 +122,7 @@ class TestE2ESearch:
         )
 
         mock_client = AsyncMock(spec=LLMClient)
-        mock_client.chat = AsyncMock(side_effect=[search_call, final])
+        mock_client.chat = AsyncMock(side_effect=[_resp(search_call), _resp(final)])
 
         engine = _make_engine(godot_project, mock_client)
         result = await engine.submit("Find where speed is defined")
@@ -148,7 +152,7 @@ class TestE2EWriteNewFile:
         final = Message.assistant(content="Created enemy.gd with 50 HP.")
 
         mock_client = AsyncMock(spec=LLMClient)
-        mock_client.chat = AsyncMock(side_effect=[write_call, final])
+        mock_client.chat = AsyncMock(side_effect=[_resp(write_call), _resp(final)])
 
         engine = _make_engine(godot_project, mock_client)
         result = await engine.submit("Create an enemy script")
@@ -189,7 +193,7 @@ class TestE2EMultiToolChain:
         )
 
         mock_client = AsyncMock(spec=LLMClient)
-        mock_client.chat = AsyncMock(side_effect=[glob_call, read_call, final])
+        mock_client.chat = AsyncMock(side_effect=[_resp(glob_call), _resp(read_call), _resp(final)])
 
         engine = _make_engine(godot_project, mock_client)
         result = await engine.submit("List all scripts and show me the player")

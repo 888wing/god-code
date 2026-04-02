@@ -8,10 +8,41 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
+class TokenUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+    def __add__(self, other: TokenUsage) -> TokenUsage:
+        return TokenUsage(
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            completion_tokens=self.completion_tokens + other.completion_tokens,
+            total_tokens=self.total_tokens + other.total_tokens,
+        )
+
+    def cost_estimate(self, model: str = "") -> float:
+        """Estimate cost in USD based on model pricing."""
+        # Pricing per 1M tokens (input/output)
+        pricing = {
+            "gpt-5.4": (2.50, 10.00),
+            "gpt-4o": (2.50, 10.00),
+            "gpt-4o-mini": (0.15, 0.60),
+        }
+        inp_rate, out_rate = pricing.get(model, (2.50, 10.00))
+        return (self.prompt_tokens * inp_rate + self.completion_tokens * out_rate) / 1_000_000
+
+
+@dataclass
 class ToolCall:
     id: str
     name: str
-    arguments: str  # JSON string
+    arguments: str
+
+
+@dataclass
+class ChatResponse:
+    message: Message
+    usage: TokenUsage
 
 
 @dataclass
@@ -145,7 +176,14 @@ class LLMClient:
                 )
                 for tc in choice["tool_calls"]
             ]
-        return Message.assistant(content=choice.get("content"), tool_calls=tool_calls)
+        msg = Message.assistant(content=choice.get("content"), tool_calls=tool_calls)
+        usage_data = data.get("usage", {})
+        usage = TokenUsage(
+            prompt_tokens=usage_data.get("prompt_tokens", 0),
+            completion_tokens=usage_data.get("completion_tokens", 0),
+            total_tokens=usage_data.get("total_tokens", 0),
+        )
+        return ChatResponse(message=msg, usage=usage)
 
     async def close(self):
         await self._http.aclose()

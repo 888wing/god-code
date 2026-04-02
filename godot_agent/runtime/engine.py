@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, field
 
-from godot_agent.llm.client import LLMClient, Message
+from godot_agent.llm.client import ChatResponse, LLMClient, Message, TokenUsage
 from godot_agent.runtime.context_manager import compact_messages, estimate_tokens
 from godot_agent.runtime.error_loop import format_validation_for_llm, validate_project
 from godot_agent.tools.registry import ToolRegistry
@@ -13,9 +14,15 @@ from godot_agent.tools.registry import ToolRegistry
 log = logging.getLogger(__name__)
 
 _COMPACT_THRESHOLD = 80000
-
-# Tools that modify files — trigger Godot validation after execution
 _FILE_MUTATING_TOOLS = {"write_file", "edit_file"}
+
+
+@dataclass
+class TurnStats:
+    """Stats for a single submit() call (may include multiple LLM round-trips)."""
+    usage: TokenUsage = field(default_factory=TokenUsage)
+    api_calls: int = 0
+    tools_called: list[str] = field(default_factory=list)
 
 
 class ConversationEngine:
@@ -34,6 +41,10 @@ class ConversationEngine:
         self.messages: list[Message] = [Message.system(system_prompt)]
         self.project_path = project_path
         self.godot_path = godot_path
+        # Cumulative session stats
+        self.session_usage = TokenUsage()
+        self.session_api_calls = 0
+        self.last_turn: TurnStats | None = None
 
     async def _maybe_compact(self) -> None:
         total = sum(estimate_tokens(str(m.content or "")) for m in self.messages)
@@ -42,7 +53,6 @@ class ConversationEngine:
             self.messages = compact_messages(self.messages, keep_recent=8)
 
     async def _post_tool_validate(self, tool_names: set[str]) -> str | None:
-        """Run Godot validation after file-mutating tools. Returns error report or None."""
         if not self.project_path:
             return None
         if not tool_names & _FILE_MUTATING_TOOLS:
@@ -58,12 +68,23 @@ class ConversationEngine:
         return None
 
     async def _run_loop(self, tools: list[dict] | None) -> str:
+        turn = TurnStats()
+
         for _ in range(self.max_tool_rounds + 1):
             await self._maybe_compact()
-            response = await self.client.chat(self.messages, tools)
+            chat_resp: ChatResponse = await self.client.chat(self.messages, tools)
+            response = chat_resp.message
+
+            # Track usage
+            turn.usage = turn.usage + chat_resp.usage
+            turn.api_calls += 1
+            self.session_usage = self.session_usage + chat_resp.usage
+            self.session_api_calls += 1
+
             self.messages.append(response)
 
             if not response.tool_calls:
+                self.last_turn = turn
                 return response.content or ""
 
             tool_names_used: set[str] = set()
@@ -73,6 +94,7 @@ class ConversationEngine:
                 except json.JSONDecodeError:
                     args = {}
                 tool_names_used.add(tc.name)
+                turn.tools_called.append(tc.name)
                 result = await self.registry.execute(tc.name, args)
                 if result.error:
                     content = json.dumps({"error": result.error})
@@ -80,7 +102,6 @@ class ConversationEngine:
                     content = json.dumps(result.output.model_dump() if result.output else {})
                 self.messages.append(Message.tool_result(tool_call_id=tc.id, content=content))
 
-            # Auto-validate after file mutations
             validation_report = await self._post_tool_validate(tool_names_used)
             if validation_report:
                 self.messages.append(Message.user(
@@ -88,6 +109,7 @@ class ConversationEngine:
                     f"Fix the errors before proceeding."
                 ))
 
+        self.last_turn = turn
         return "Tool call limit reached. Please simplify the request."
 
     async def submit(self, user_input: str) -> str:
