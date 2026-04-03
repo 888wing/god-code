@@ -1,6 +1,6 @@
 [project]
 name = "god-code"
-version = "0.6.0"
+version = "0.6.1"
 description = "AI coding agent specialized for Godot game development"
 requires-python = ">=3.9"
 license = {text = "GPL-3.0-or-later"}

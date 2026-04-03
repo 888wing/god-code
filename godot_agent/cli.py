@@ -702,7 +702,7 @@ def _run_setup_wizard(config_path: Path | None = None) -> None:
     click.echo()
 
 
-_VERSION = "0.6.0"
+_VERSION = "0.6.1"
 
 
 def _check_update() -> None:
@@ -1678,6 +1678,58 @@ def mcp_command(project: str):
     """
     from godot_agent.mcp_server import run_mcp_server
     run_mcp_server(project_path=project)
+
+
+@main.command()
+def tools():
+    """List all available MCP tools with descriptions."""
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+
+    console = Console()
+
+    try:
+        from godot_agent.mcp_server import mcp as mcp_instance
+        mcp_tools = mcp_instance._tool_manager._tools
+    except Exception:
+        console.print("[red]MCP not available. Install with: pip install god-code[mcp][/]")
+        return
+
+    t = Table(show_header=True, padding=(0, 1))
+    t.add_column("#", style="dim", width=3)
+    t.add_column("Tool", style="green bold")
+    t.add_column("Description", style="dim")
+
+    for i, (name, tool) in enumerate(sorted(mcp_tools.items()), 1):
+        desc = (tool.description or "").split("\n")[0][:80]
+        t.add_row(str(i), name, desc)
+
+    console.print(Panel(t, title=f"[cyan]God Code MCP Tools ({len(mcp_tools)})[/]", border_style="cyan"))
+    console.print()
+    console.print("[dim]Use these tools via MCP in Claude Code, or directly in god-code chat.[/]")
+
+
+@main.command("update-skill")
+def update_skill():
+    """Download/update the god-code-setup skill for Claude Code."""
+    from pathlib import Path
+    import httpx
+
+    skill_dir = Path.home() / ".claude" / "skills" / "god-code-setup"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_file = skill_dir / "SKILL.md"
+    url = "https://raw.githubusercontent.com/888wing/god-code/main/skills/god-code-setup/SKILL.md"
+
+    click.echo(f"Downloading skill from {url}...")
+    try:
+        resp = httpx.get(url, timeout=10, follow_redirects=True)
+        resp.raise_for_status()
+        skill_file.write_text(resp.text)
+        click.secho(f"Skill updated: {skill_file}", fg="green")
+        click.echo("Restart Claude Code to activate.")
+    except Exception as e:
+        click.secho(f"Failed: {e}", fg="red")
 
 
 if __name__ == "__main__":
