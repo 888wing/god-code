@@ -45,6 +45,13 @@ class AgentConfig(BaseModel):
     enabled_skills: list[str] = Field(default_factory=list)
     disabled_skills: list[str] = Field(default_factory=list)
 
+    # Backend orchestration
+    backend_url: str = ""                    # Empty = direct provider (current behavior)
+    backend_cost_preference: str = "balanced"  # economy | balanced | quality
+    backend_force_provider: str = ""
+    backend_force_model: str = ""
+    backend_provider_keys: dict[str, str] = Field(default_factory=dict)
+
     # Paths
     session_dir: str = ".agent_sessions"
 

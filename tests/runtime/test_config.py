@@ -24,6 +24,28 @@ class TestAgentConfig:
         assert config.max_turns == 10
 
 
+class TestBackendConfig:
+    def test_backend_config_defaults(self):
+        """Backend config fields default to empty/balanced."""
+        cfg = AgentConfig()
+        assert cfg.backend_url == ""
+        assert cfg.backend_cost_preference == "balanced"
+        assert cfg.backend_force_provider == ""
+        assert cfg.backend_force_model == ""
+        assert cfg.backend_provider_keys == {}
+
+    def test_backend_config_from_kwargs(self):
+        """Backend config fields can be set via constructor."""
+        cfg = AgentConfig(
+            backend_url="https://api.god-code.dev",
+            backend_cost_preference="quality",
+            backend_provider_keys={"openai": "sk-xxx"},
+        )
+        assert cfg.backend_url == "https://api.god-code.dev"
+        assert cfg.backend_cost_preference == "quality"
+        assert cfg.backend_provider_keys["openai"] == "sk-xxx"
+
+
 class TestLoadConfig:
     def test_load_from_file(self, tmp_path):
         config_file = tmp_path / "config.json"
