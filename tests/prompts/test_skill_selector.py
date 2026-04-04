@@ -66,3 +66,23 @@ def test_intent_profile_can_activate_genre_skill():
         intent_profile=GameplayIntentProfile(genre="bullet_hell", enemy_model="scripted_patterns"),
     )
     assert any(skill.key == "bullet_hell" for skill in skills)
+
+
+def test_ui_prompt_activates_ui_layout_skill():
+    skills = select_skills("fix the UI layout for my HUD", file_paths=["scenes/hud.tscn"])
+    assert any(skill.key == "ui_layout" for skill in skills)
+
+
+def test_animation_prompt_activates_animation_pipeline_skill():
+    skills = select_skills("add walk animation to player", file_paths=["scripts/player.gd"])
+    assert any(skill.key == "animation_pipeline" for skill in skills)
+
+
+def test_scene_transition_prompt_activates_transition_skill():
+    skills = select_skills("implement scene transition with fade", file_paths=["scripts/transition_manager.gd"])
+    assert any(skill.key == "scene_transition" for skill in skills)
+
+
+def test_save_load_prompt_activates_game_state_skill():
+    skills = select_skills("add save and load system", file_paths=["scripts/save_data.gd"])
+    assert any(skill.key == "game_state" for skill in skills)
