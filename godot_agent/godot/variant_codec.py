@@ -90,6 +90,8 @@ def _is_probably_godot_literal(text: str) -> bool:
         return True
     if stripped.startswith("{") and stripped.endswith("}"):
         return True
+    if re.match(r"^[A-Z_][A-Z0-9_]*$", stripped):
+        return True
     if _parse_number(stripped) is not None:
         return True
     return bool(_CALL_RE.match(stripped))
