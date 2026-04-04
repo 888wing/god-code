@@ -10,3 +10,6 @@ auth.json
 *.pem
 .idea/
 .vscode/
+.codetape/traces/
+.codetape/drift.json
+site/

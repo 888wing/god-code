@@ -48,3 +48,25 @@ async def test_reviewer_fails_missing_scene_resource(tmp_path: Path):
     )
 
     assert report.verdict == "FAIL"
+
+
+@pytest.mark.asyncio
+async def test_reviewer_reports_ui_warnings_as_partial(tmp_path: Path):
+    (tmp_path / "project.godot").write_text('config_version=5\n\n[application]\nconfig/name="ReviewGame"\n')
+    scene = tmp_path / "menu.tscn"
+    scene.write_text(
+        '[gd_scene format=3]\n\n'
+        '[node name="Menu" type="Control"]\n'
+        '[node name="PlayButton" type="Button" parent="."]\n'
+        'custom_minimum_size = Vector2(100, 24)\n'
+    )
+
+    report = await review_changes(
+        project_root=tmp_path,
+        changed_files={str(scene)},
+        godot_path="true",
+        quality_report=QualityGateReport(changed_files=["menu.tscn"], checks=[]),
+    )
+
+    assert report.verdict == "PARTIAL"
+    assert any("UI layout" in check.description for check in report.checks)

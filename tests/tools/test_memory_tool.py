@@ -17,3 +17,25 @@ def test_update_and_read_design_memory_tool(tmp_path):
         assert "Readable combat" in read_result.output.report
     finally:
         clear_project_root()
+
+
+def test_update_gameplay_intent_memory_tool(tmp_path):
+    set_project_root(tmp_path)
+    try:
+        update_tool = UpdateDesignMemoryTool()
+        read_tool = ReadDesignMemoryTool()
+
+        import asyncio
+        asyncio.run(
+            update_tool.execute(
+                update_tool.Input(
+                    project_path=str(tmp_path),
+                    section="gameplay_intent",
+                    mapping={"genre": "bullet_hell", "enemy_model": "scripted_patterns", "confirmed": True},
+                )
+            )
+        )
+        read_result = asyncio.run(read_tool.execute(read_tool.Input(project_path=str(tmp_path))))
+        assert "bullet_hell" in read_result.output.report
+    finally:
+        clear_project_root()

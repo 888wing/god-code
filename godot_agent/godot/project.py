@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+DEFAULT_AUDIO_BUSES = ["Master", "Music", "SFX", "UI"]
+
+
 @dataclass
 class GodotProject:
     name: str = ""
@@ -14,7 +17,20 @@ class GodotProject:
     viewport_width: int = 1920
     viewport_height: int = 1080
     renderer: str = ""
+    audio_bus_layout: str = ""
+    audio_buses: list[str] = field(default_factory=lambda: list(DEFAULT_AUDIO_BUSES))
     raw_sections: dict[str, dict[str, str]] = field(default_factory=dict)
+
+
+def _parse_bus_layout(path: Path) -> list[str]:
+    if not path.exists():
+        return list(DEFAULT_AUDIO_BUSES)
+    buses: list[str] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = re.match(r'^\[bus\s+name="([^"]+)"', line.strip())
+        if match:
+            buses.append(match.group(1))
+    return buses or list(DEFAULT_AUDIO_BUSES)
 
 
 def parse_project_godot(path: Path) -> GodotProject:
@@ -55,4 +71,21 @@ def parse_project_godot(path: Path) -> GodotProject:
 
     rendering = section_data.get("rendering", {})
     proj.renderer = rendering.get("renderer/rendering_method", "")
+
+    audio = section_data.get("audio", {})
+    proj.audio_bus_layout = audio.get("buses/default_bus_layout", "")
+    if proj.audio_bus_layout.startswith("res://"):
+        bus_layout_path = path.parent / proj.audio_bus_layout.removeprefix("res://")
+        proj.audio_buses = _parse_bus_layout(bus_layout_path)
+    else:
+        default_bus_layout = path.parent / "default_bus_layout.tres"
+        proj.audio_buses = _parse_bus_layout(default_bus_layout)
     return proj
+
+
+def available_audio_buses(project_root: Path) -> set[str]:
+    project_file = project_root / "project.godot"
+    if not project_file.exists():
+        return set(DEFAULT_AUDIO_BUSES)
+    project = parse_project_godot(project_file)
+    return set(project.audio_buses or DEFAULT_AUDIO_BUSES)

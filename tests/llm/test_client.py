@@ -7,6 +7,7 @@ class TestLLMConfig:
         assert config.base_url == "https://api.openai.com/v1"
         assert config.provider == "openai"
         assert config.model == "gpt-5.4"
+        assert config.computer_use is False
 
     def test_custom_base_url(self):
         config = LLMConfig(api_key="key", base_url="http://localhost:11434/v1")
@@ -147,3 +148,16 @@ class TestLLMClient:
     def test_cost_estimate_supports_prefixed_models(self):
         usage = TokenUsage(prompt_tokens=1_000_000, completion_tokens=1_000_000)
         assert usage.cost_estimate("openai/gpt-5.4") == 17.5
+
+    def test_build_computer_use_request(self):
+        client = LLMClient(
+            LLMConfig(
+                api_key="key",
+                provider="openai",
+                model="gpt-5.4",
+                computer_use=True,
+            )
+        )
+        body = client.adapter.build_computer_use_request(client.config, prompt="Click Start")
+        assert body["tools"][0]["type"] == "computer"
+        assert body["input"] == "Click Start"

@@ -35,3 +35,21 @@ async def test_quality_gate_fails_for_missing_scene_resource(tmp_path: Path):
 
     assert report.verdict == "fail"
     assert any(check.name == "scene-resources" for check in report.errors)
+
+
+@pytest.mark.asyncio
+async def test_quality_gate_reports_ui_and_audio_warnings(tmp_path: Path):
+    (tmp_path / "project.godot").write_text('config_version=5\n\n[application]\nconfig/name="GateGame"\n')
+    scene = tmp_path / "menu.tscn"
+    scene.write_text(
+        '[gd_scene format=3]\n\n'
+        '[node name="Menu" type="Control"]\n'
+        '[node name="PlayButton" type="Button" parent="."]\n'
+        'custom_minimum_size = Vector2(100, 24)\n'
+        '[node name="ClickAudio" type="AudioStreamPlayer" parent="."]\n'
+    )
+
+    report = await run_quality_gate(project_root=tmp_path, changed_files={str(scene)}, godot_path="true")
+
+    assert any(check.name == "ui-layout" for check in report.warnings)
+    assert any(check.name == "audio-nodes" for check in report.warnings)

@@ -8,11 +8,17 @@ All notable changes to God Code will be documented in this file.
 - Workspace-style chat TUI with session snapshot, recent activity, and live streaming panels
 - Interaction modes (`apply`, `plan`, `explain`, `review`, `fix`) with mode-aware tool availability
 - Autosaved session metadata with `/sessions`, `/resume`, `/new`, and project-aware restore flow
+- Gameplay intent resolver with persistent profile storage in design memory
+- `/intent` commands and TUI intent panel for confirming genre/combat/enemy direction
+- Genre-aware internal skills: `bullet_hell`, `topdown_shooter`, `platformer_enemy`, `tower_defense`, `stealth_guard`
+- Profile-aware playtest selection and report context
+- MkDocs documentation site skeleton with getting-started, TUI, validation, provider, and MCP guides
 
 ### Changed
 - Unified `ask` and `chat` rendering pipeline, including tool progress and validation feedback
 - Improved post-tool validation visibility and tool result summaries in interactive sessions
 - Session persistence now preserves assistant tool calls and richer metadata for restore
+- Prompt assembly, skill routing, planner/reviewer/playtest flows, and workspace state now consume shared gameplay intent
 
 ## [0.1.0] - 2026-04-02
 

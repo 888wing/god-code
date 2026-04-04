@@ -7,75 +7,17 @@ Pipeline enforces quality: chroma key, crop, resize, hard edges.
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 from pathlib import Path
 
 import httpx
-from PIL import Image
 from pydantic import BaseModel, Field
 
 from godot_agent.prompts.image_templates import build_image_prompt
 from godot_agent.tools.base import BaseTool, ToolResult
+from godot_agent.tools.sprite_pipeline import post_process_sprite
 
 log = logging.getLogger(__name__)
-
-# Chroma key color (bright green)
-_CHROMA_KEY = (0, 255, 0)
-_CHROMA_TOLERANCE = 60
-
-
-def _chroma_key_to_transparent(img: Image.Image, tolerance: int = _CHROMA_TOLERANCE) -> Image.Image:
-    """Replace #00FF00 background with transparency."""
-    img = img.convert("RGBA")
-    data = img.getdata()
-    new_data = []
-    for r, g, b, a in data:
-        if (abs(r - _CHROMA_KEY[0]) < tolerance and
-            abs(g - _CHROMA_KEY[1]) < tolerance and
-            abs(b - _CHROMA_KEY[2]) < tolerance):
-            new_data.append((0, 0, 0, 0))
-        else:
-            new_data.append((r, g, b, a))
-    img.putdata(new_data)
-    return img
-
-
-def _auto_crop(img: Image.Image) -> Image.Image:
-    """Trim transparent edges, leaving a small margin."""
-    bbox = img.getbbox()
-    if bbox is None:
-        return img
-    # Add 2px margin
-    x1, y1, x2, y2 = bbox
-    margin = 2
-    x1 = max(0, x1 - margin)
-    y1 = max(0, y1 - margin)
-    x2 = min(img.width, x2 + margin)
-    y2 = min(img.height, y2 + margin)
-    return img.crop((x1, y1, x2, y2))
-
-
-def _resize_pixel_art(img: Image.Image, target_size: int) -> Image.Image:
-    """Resize to target size using nearest-neighbor (preserves pixel edges)."""
-    # Make square first
-    max_dim = max(img.width, img.height)
-    if img.width != img.height:
-        square = Image.new("RGBA", (max_dim, max_dim), (0, 0, 0, 0))
-        offset_x = (max_dim - img.width) // 2
-        offset_y = (max_dim - img.height) // 2
-        square.paste(img, (offset_x, offset_y))
-        img = square
-    return img.resize((target_size, target_size), Image.Resampling.NEAREST)
-
-
-def _post_process(raw_bytes: bytes, target_size: int) -> Image.Image:
-    """Full post-processing pipeline: chroma key → crop → resize."""
-    img = Image.open(io.BytesIO(raw_bytes))
-    img = _chroma_key_to_transparent(img)
-    img = _auto_crop(img)
-    img = _resize_pixel_art(img, target_size)
-    return img
 
 
 class GenerateSpriteTool(BaseTool):
@@ -162,7 +104,7 @@ class GenerateSpriteTool(BaseTool):
                 return ToolResult(error="No image data in API response")
 
             # Post-process
-            processed = _post_process(raw_bytes, input.size)
+            processed = post_process_sprite(raw_bytes, target_size=input.size)
 
             # Save
             output = Path(input.output_path)

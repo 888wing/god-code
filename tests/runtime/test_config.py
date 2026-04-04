@@ -8,6 +8,10 @@ class TestAgentConfig:
         assert config.provider == "openai"
         assert config.model == "gpt-5.4"
         assert config.reasoning_effort == "high"
+        assert config.computer_use is False
+        assert config.skill_mode == "auto"
+        assert config.enabled_skills == []
+        assert config.disabled_skills == []
         assert config.max_turns == 20
         assert config.screenshot_max_iterations == 5
         assert config.mode == "apply"
@@ -59,3 +63,22 @@ class TestLoadConfig:
         }))
         config = load_config(config_file)
         assert config.provider == "gemini"
+
+    def test_load_skill_settings_from_file(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({
+            "skill_mode": "hybrid",
+            "enabled_skills": ["collision"],
+            "disabled_skills": ["physics"],
+            "computer_use": True,
+            "computer_use_environment": "browser",
+            "computer_use_display_width": 1440,
+            "computer_use_display_height": 900,
+        }))
+        config = load_config(config_file)
+        assert config.skill_mode == "hybrid"
+        assert config.enabled_skills == ["collision"]
+        assert config.disabled_skills == ["physics"]
+        assert config.computer_use is True
+        assert config.computer_use_display_width == 1440
+        assert config.computer_use_display_height == 900

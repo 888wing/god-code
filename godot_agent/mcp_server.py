@@ -38,6 +38,16 @@ def _godot_path() -> str:
     return "godot"
 
 
+async def _execute_tool(tool_cls, **kwargs) -> dict:
+    tool = tool_cls()
+    result = await tool.execute(tool.Input(**kwargs))
+    if result.error:
+        return {"error": result.error}
+    if result.output is None:
+        return {"ok": True}
+    return result.output.model_dump() if hasattr(result.output, "model_dump") else dict(result.output)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # ANALYSIS TOOLS (read-only, zero side effects)
 # ═══════════════════════════════════════════════════════════════════
@@ -157,6 +167,49 @@ def validate_resources(file_path: str, project_path: str = "") -> dict:
     from godot_agent.godot.resource_validator import validate_resources as _validate
     issues = _validate(Path(file_path), project_root=Path(project_path) if project_path else _root())
     return {"valid": len(issues) == 0, "missing": issues}
+
+
+@mcp.tool()
+def plan_ui_layout(pattern: str) -> dict:
+    """Generate a standard UI layout configuration. Patterns: hud_overlay, pause_menu, dialog_box, inventory_grid, title_screen, health_bar."""
+    from godot_agent.godot.ui_layout_advisor import plan_ui_layout as _plan
+
+    config = _plan(pattern)
+    if config is None:
+        return {"error": f"Unknown pattern: {pattern}"}
+    return {"summary": config.describe(), "nodes": config.to_tscn_nodes(), "gdscript": config.to_gdscript()}
+
+
+@mcp.tool()
+def validate_ui_layout(file_path: str) -> dict:
+    """Validate Control-based layout conventions in a .tscn scene."""
+    from godot_agent.godot.scene_parser import parse_tscn
+    from godot_agent.godot.ui_layout_advisor import validate_ui_layout as _validate
+
+    scene = parse_tscn(Path(file_path).read_text(errors="replace"))
+    warnings = _validate(scene)
+    return {"warning_count": len(warnings), "warnings": warnings, "summary": "\n".join(warnings) if warnings else "No UI layout issues found."}
+
+
+@mcp.tool()
+def scaffold_audio(pattern: str = "standard", parent_node: str = ".") -> dict:
+    """Generate audio node scaffolding. Patterns: minimal, standard, positional."""
+    from godot_agent.godot.audio_scaffolder import scaffold_audio_nodes
+
+    nodes = scaffold_audio_nodes(pattern, parent_node=parent_node)
+    return {"summary": f"Audio scaffold {pattern}", "nodes": nodes}
+
+
+@mcp.tool()
+def validate_audio_nodes(file_path: str, project_path: str = "") -> dict:
+    """Validate audio nodes and bus assignments in a .tscn scene."""
+    from godot_agent.godot.audio_scaffolder import validate_audio_nodes as _validate
+    from godot_agent.godot.scene_parser import parse_tscn
+
+    root = Path(project_path) if project_path else _root()
+    scene = parse_tscn(Path(file_path).read_text(errors="replace"))
+    warnings = _validate(scene, root)
+    return {"warning_count": len(warnings), "warnings": warnings, "summary": "\n".join(warnings) if warnings else "No audio node issues found."}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -323,6 +376,156 @@ async def screenshot_scene(scene_path: str, output_path: str = "", delay_ms: int
 
 
 @mcp.tool()
+async def get_runtime_snapshot(project_path: str = "") -> dict:
+    """Read the latest runtime snapshot, including state, fixtures, tick, and recent events."""
+    from godot_agent.tools.editor_bridge import GetRuntimeSnapshotTool
+
+    root = project_path or str(_root())
+    return await _execute_tool(GetRuntimeSnapshotTool, project_path=root)
+
+
+@mcp.tool()
+async def run_playtest(project_path: str = "", changed_files: list[str] | None = None) -> dict:
+    """Run the scenario-based playtest harness against the latest runtime snapshot."""
+    from godot_agent.tools.editor_bridge import RunPlaytestTool
+
+    root = project_path or str(_root())
+    return await _execute_tool(RunPlaytestTool, project_path=root, changed_files=changed_files or [])
+
+
+@mcp.tool()
+async def load_scene(scene_path: str) -> dict:
+    """Set the active scene in the runtime harness."""
+    from godot_agent.tools.runtime_harness import LoadSceneTool
+
+    return await _execute_tool(LoadSceneTool, scene_path=scene_path)
+
+
+@mcp.tool()
+async def set_fixture(name: str, payload: dict | None = None) -> dict:
+    """Attach deterministic fixture data to the runtime harness."""
+    from godot_agent.tools.runtime_harness import SetFixtureTool
+
+    return await _execute_tool(SetFixtureTool, name=name, payload=payload or {})
+
+
+@mcp.tool()
+async def press_action(action: str, pressed: bool = True) -> dict:
+    """Record a gameplay/UI action in the runtime harness."""
+    from godot_agent.tools.runtime_harness import PressActionTool
+
+    return await _execute_tool(PressActionTool, action=action, pressed=pressed)
+
+
+@mcp.tool()
+async def advance_ticks(count: int = 1, state_updates: dict | None = None, events: list[dict] | None = None) -> dict:
+    """Advance the runtime harness by a number of physics ticks."""
+    from godot_agent.tools.runtime_harness import AdvanceTicksTool
+
+    return await _execute_tool(
+        AdvanceTicksTool,
+        count=count,
+        state_updates=state_updates or {},
+        events=events or [],
+    )
+
+
+@mcp.tool()
+async def get_runtime_state(project_path: str = "") -> dict:
+    """Read the runtime harness state, fixtures, active inputs, and current tick."""
+    from godot_agent.tools.runtime_harness import GetRuntimeStateTool
+
+    root = project_path or str(_root())
+    return await _execute_tool(GetRuntimeStateTool, project_path=root)
+
+
+@mcp.tool()
+async def get_events_since(tick: int = 0) -> dict:
+    """Read runtime events emitted after a specific tick."""
+    from godot_agent.tools.runtime_harness import GetEventsSinceTool
+
+    return await _execute_tool(GetEventsSinceTool, tick=tick)
+
+
+@mcp.tool()
+async def capture_viewport(
+    project_path: str = "",
+    scene_path: str = "",
+    godot_path: str = "",
+    output_path: str = "",
+    artifact_name: str = "viewport",
+    delay_ms: int = 1000,
+) -> dict:
+    """Persist a viewport screenshot artifact, reusing a runtime screenshot when available."""
+    from godot_agent.tools.runtime_harness import CaptureViewportTool
+
+    root = project_path or str(_root())
+    return await _execute_tool(
+        CaptureViewportTool,
+        project_path=root,
+        scene_path=scene_path,
+        godot_path=godot_path or _godot_path(),
+        output_path=output_path,
+        artifact_name=artifact_name,
+        delay_ms=delay_ms,
+    )
+
+
+@mcp.tool()
+async def compare_baseline(
+    baseline_id: str,
+    actual_path: str,
+    project_path: str = "",
+    tolerance: int = 0,
+    region: list[int] | None = None,
+    create_baseline: bool = False,
+) -> dict:
+    """Compare a screenshot or sprite artifact against a stored baseline."""
+    from godot_agent.tools.runtime_harness import CompareBaselineTool
+
+    root = project_path or str(_root())
+    return await _execute_tool(
+        CompareBaselineTool,
+        project_path=root,
+        actual_path=actual_path,
+        baseline_id=baseline_id,
+        tolerance=tolerance,
+        region=region or [],
+        create_baseline=create_baseline,
+    )
+
+
+@mcp.tool()
+async def report_failure(
+    test_id: str,
+    project_path: str = "",
+    scene: str = "",
+    step: str = "",
+    reason: str = "",
+    ui_state: dict | None = None,
+    image_assert: dict | None = None,
+    artifacts: dict | None = None,
+    details: dict | None = None,
+) -> dict:
+    """Write a structured failure bundle to the artifact directory."""
+    from godot_agent.tools.runtime_harness import ReportFailureTool
+
+    root = project_path or str(_root())
+    return await _execute_tool(
+        ReportFailureTool,
+        project_path=root,
+        test_id=test_id,
+        scene=scene,
+        step=step,
+        reason=reason,
+        ui_state=ui_state or {},
+        image_assert=image_assert or {},
+        artifacts=artifacts or {},
+        details=details or {},
+    )
+
+
+@mcp.tool()
 async def run_scene(scene_path: str = "", project_path: str = "", timeout_seconds: int = 5) -> dict:
     """Run a Godot scene briefly to verify it loads without errors.
 
@@ -384,6 +587,53 @@ async def generate_sprite(
         return {"error": result.error}
     return {"path": result.output.path, "width": result.output.width,
             "height": result.output.height, "prompt_used": result.output.prompt_used}
+
+
+@mcp.tool()
+async def slice_sprite_sheet(
+    input_path: str,
+    output_dir: str,
+    frame_width: int,
+    frame_height: int,
+    columns: int = 0,
+    rows: int = 0,
+    prefix: str = "frame",
+    chroma_key: str = "#00FF00",
+    tolerance: int = 60,
+    trim: bool = False,
+    metadata_path: str = "",
+) -> dict:
+    """Slice a sprite sheet into transparent PNG frames and emit manifest metadata."""
+    from godot_agent.tools.runtime_harness import SliceSpriteSheetTool
+
+    return await _execute_tool(
+        SliceSpriteSheetTool,
+        input_path=input_path,
+        output_dir=output_dir,
+        frame_width=frame_width,
+        frame_height=frame_height,
+        columns=columns,
+        rows=rows,
+        prefix=prefix,
+        chroma_key=chroma_key,
+        tolerance=tolerance,
+        trim=trim,
+        metadata_path=metadata_path,
+    )
+
+
+@mcp.tool()
+async def validate_sprite_imports(project_path: str = "", metadata_path: str = "", sprite_dir: str = "") -> dict:
+    """Validate sliced sprite frames or a manifest for missing files and inconsistent sizes."""
+    from godot_agent.tools.runtime_harness import ValidateSpriteImportsTool
+
+    root = project_path or str(_root())
+    return await _execute_tool(
+        ValidateSpriteImportsTool,
+        project_path=root,
+        metadata_path=metadata_path,
+        sprite_dir=sprite_dir,
+    )
 
 
 def run_mcp_server(project_path: str | None = None) -> None:

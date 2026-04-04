@@ -64,3 +64,27 @@ async def test_mutate_scene_tools(scene_project: Path):
     remove_result = await remove_tool.execute(remove_tool.Input(path=scene_path, node_name="Button"))
     assert remove_result.error is None
     assert "Button" not in (scene_project / "main.tscn").read_text()
+
+
+@pytest.mark.asyncio
+async def test_scene_tools_accept_typed_property_payloads(scene_project: Path):
+    add_tool = AddSceneNodeTool()
+    scene_path = str(scene_project / "main.tscn")
+
+    add_result = await add_tool.execute(
+        add_tool.Input(
+            path=scene_path,
+            parent=".",
+            name="PauseButton",
+            type="Button",
+            properties={
+                "text": {"__type__": "String", "value": "Pause"},
+                "custom_minimum_size": {"__type__": "Vector2", "x": 200, "y": 44},
+            },
+        )
+    )
+    assert add_result.error is None
+
+    text = (scene_project / "main.tscn").read_text()
+    assert 'text = "Pause"' in text
+    assert "custom_minimum_size = Vector2(200, 44)" in text

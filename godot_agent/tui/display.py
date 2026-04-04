@@ -29,10 +29,15 @@ class ChatDisplay:
         self.provider = ""
         self.model = ""
         self.effort = "high"
+        self.skill_mode = "auto"
+        self.active_skills: list[str] = []
+        self.enabled_skills: list[str] = []
+        self.disabled_skills: list[str] = []
         self.mode = "apply"
         self.project_name: str | None = None
         self.project_path = ""
         self.project_info: dict[str, Any] = {}
+        self.intent_profile: dict[str, Any] = {}
         self.last_focus = ""
         self.last_response_preview = ""
         self.last_validation = "Not run"
@@ -53,23 +58,34 @@ class ChatDisplay:
         self,
         *,
         session_id: str,
-        provider: str = "",
         model: str,
-        effort: str = "high",
         mode: str,
         project_name: str | None,
         project_path: str,
+        provider: str = "",
+        effort: str = "high",
+        skill_mode: str = "auto",
+        active_skills: list[str] | None = None,
+        enabled_skills: list[str] | None = None,
+        disabled_skills: list[str] | None = None,
         project_info: dict[str, Any] | None = None,
+        intent_profile: dict[str, Any] | None = None,
     ) -> None:
         self.session_id = session_id
         self.provider = provider
         self.model = model
         self.effort = effort
+        self.skill_mode = skill_mode
+        self.active_skills = list(active_skills or [])
+        self.enabled_skills = list(enabled_skills or [])
+        self.disabled_skills = list(disabled_skills or [])
         self.mode = mode
         self.project_name = project_name
         self.project_path = project_path
         if project_info is not None:
             self.project_info = project_info
+        if intent_profile is not None:
+            self.intent_profile = dict(intent_profile)
 
     def update_project_info(self, project_info: dict[str, Any]) -> None:
         self.project_info = project_info
@@ -94,15 +110,25 @@ class ChatDisplay:
         *,
         provider: str = "",
         effort: str = "high",
+        skill_mode: str = "auto",
+        active_skills: list[str] | None = None,
+        enabled_skills: list[str] | None = None,
+        disabled_skills: list[str] | None = None,
+        intent_profile: dict[str, Any] | None = None,
     ) -> None:
         self.configure_workspace(
             session_id=session_id,
             provider=provider,
             model=model,
             effort=effort,
+            skill_mode=skill_mode,
+            active_skills=active_skills,
+            enabled_skills=enabled_skills,
+            disabled_skills=disabled_skills,
             mode=mode,
             project_name=project_name,
             project_path=project_path,
+            intent_profile=intent_profile,
         )
         title = Text("God Code", style="bold cyan")
         spec = get_mode_spec(mode)
@@ -110,6 +136,7 @@ class ChatDisplay:
         if provider:
             parts.append(f"Provider: {provider}")
         parts.extend([f"Model: {model}", f"Effort: {effort}", f"Mode: {spec.label}"])
+        parts.append(f"Skills: {skill_mode}")
         if project_name:
             parts.append(f"Project: {project_name}")
         else:
@@ -131,6 +158,8 @@ class ChatDisplay:
         t.add_row("/provider [name]", "show or switch provider")
         t.add_row("/model [name]", "show or switch model")
         t.add_row("/effort [level]", "show or switch reasoning effort")
+        t.add_row("/skills [cmd]", "list or override internal skills")
+        t.add_row("/intent [cmd]", "show or confirm gameplay intent")
         t.add_row("/info", "show project details")
         t.add_row("/status", "show provider, model, auth, and mode")
         t.add_row("/usage", "show token usage and cost")
@@ -156,6 +185,7 @@ class ChatDisplay:
         session_table.add_row("Provider", self.provider or "-")
         session_table.add_row("Model", self.model or "-")
         session_table.add_row("Effort", self.effort or "-")
+        session_table.add_row("Skills", self.skill_mode or "-")
         session_table.add_row("Mode", spec.label)
         session_table.add_row("Project", self.project_name or self.project_path or "-")
 
@@ -172,10 +202,22 @@ class ChatDisplay:
         runtime_table.add_column(style="bold")
         runtime_table.add_column()
         runtime_table.add_row("Focus", self.last_focus or "-")
+        runtime_table.add_row("Active Skills", ", ".join(self.active_skills) if self.active_skills else "-")
         runtime_table.add_row("Last Validation", self.last_validation)
         runtime_table.add_row("Tokens", f"{self.session_total_tokens:,}")
         runtime_table.add_row("API Calls", str(self.session_api_calls))
         runtime_table.add_row("Est. Cost", f"${self.session_cost:.4f}")
+
+        intent_table = Table(show_header=False, box=None, padding=(0, 1))
+        intent_table.add_column(style="bold")
+        intent_table.add_column()
+        intent_table.add_row("Genre", str(self.intent_profile.get("genre", "-") or "-"))
+        intent_table.add_row("Combat", str(self.intent_profile.get("combat_model", "-") or "-"))
+        intent_table.add_row("Enemy", str(self.intent_profile.get("enemy_model", "-") or "-"))
+        intent_table.add_row("Boss", str(self.intent_profile.get("boss_model", "-") or "-"))
+        intent_table.add_row("Confidence", f"{float(self.intent_profile.get('confidence', 0.0) or 0.0):.2f}")
+        conflicts = self.intent_profile.get("conflicts") or []
+        intent_table.add_row("Conflicts", ", ".join(conflicts) if conflicts else "-")
 
         activity_table = Table(show_header=False, box=None, padding=(0, 1))
         activity_table.add_column(style="dim")
@@ -190,6 +232,7 @@ class ChatDisplay:
                 Panel(session_table, title="Session", border_style="cyan"),
                 Panel(project_table, title="Project", border_style="blue"),
                 Panel(runtime_table, title="Runtime", border_style="magenta"),
+                Panel(intent_table, title="Intent", border_style="yellow"),
             ],
             equal=True,
             expand=True,
@@ -333,6 +376,13 @@ class ChatDisplay:
             "base_url": "API base URL; used to build the chat/completions endpoint",
             "model": "Default model name for the active provider",
             "reasoning_effort": "Normalized reasoning level (minimal, low, medium, high, xhigh)",
+            "computer_use": "Enable OpenAI Responses computer-use requests",
+            "computer_use_environment": "Computer-use environment label",
+            "computer_use_display_width": "Computer-use display width in pixels",
+            "computer_use_display_height": "Computer-use display height in pixels",
+            "skill_mode": "Internal skill selection mode (auto, manual, hybrid)",
+            "enabled_skills": "Skills forced on for prompt injection and tool narrowing",
+            "disabled_skills": "Skills forced off even when auto-selection would choose them",
             "oauth_token": "OAuth token used when no API key is configured (masked)",
             "max_turns": "Maximum tool rounds per request",
             "max_tokens": "Maximum output tokens requested from the model",
@@ -354,6 +404,8 @@ class ChatDisplay:
         secret_keys = {"api_key", "oauth_token"}
         ordered_keys = [
             "api_key", "provider", "base_url", "model", "reasoning_effort", "oauth_token",
+            "computer_use", "computer_use_environment", "computer_use_display_width", "computer_use_display_height",
+            "skill_mode", "enabled_skills", "disabled_skills",
             "max_turns", "max_tokens", "temperature", "godot_path",
             "language", "verbosity", "mode", "auto_validate", "auto_commit",
             "screenshot_max_iterations", "token_budget", "safety", "streaming",
@@ -367,6 +419,71 @@ class ChatDisplay:
                 val = "*" * min(len(text), 8) if len(text) <= 8 else f"{text[:4]}...{text[-4:]}"
             t.add_row(key, str(val), desc)
         self.console.print(Panel(t, title="Settings", border_style="blue"))
+
+    def skills_panel(
+        self,
+        *,
+        available: list[MenuOption],
+        skill_mode: str,
+        active_skills: list[str],
+        enabled_skills: list[str],
+        disabled_skills: list[str],
+    ) -> None:
+        table = Table(show_header=True, box=None, padding=(0, 1))
+        table.add_column("ID", style="bold cyan")
+        table.add_column("Skill", style="bold")
+        table.add_column("Status")
+        table.add_column("Description", style="dim")
+        active = set(active_skills)
+        enabled = set(enabled_skills)
+        disabled = set(disabled_skills)
+        for option in available:
+            status_parts: list[str] = []
+            if option.value in active:
+                status_parts.append("active")
+            if option.value in enabled:
+                status_parts.append("forced on")
+            if option.value in disabled:
+                status_parts.append("forced off")
+            table.add_row(
+                option.value,
+                option.label,
+                ", ".join(status_parts) if status_parts else "-",
+                option.description or "-",
+            )
+
+        summary = Table(show_header=False, box=None, padding=(0, 1))
+        summary.add_column(style="bold")
+        summary.add_column()
+        summary.add_row("Mode", skill_mode)
+        summary.add_row("Active", ", ".join(active_skills) if active_skills else "-")
+        summary.add_row("Enabled", ", ".join(enabled_skills) if enabled_skills else "-")
+        summary.add_row("Disabled", ", ".join(disabled_skills) if disabled_skills else "-")
+        self.console.print(Panel(Group(summary, table), title="Skills", border_style="blue"))
+
+    def intent_panel(self, profile: dict[str, Any]) -> None:
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column(style="bold")
+        table.add_column()
+        for key, label in (
+            ("genre", "Genre"),
+            ("camera_model", "Camera"),
+            ("player_control_model", "Player Control"),
+            ("combat_model", "Combat"),
+            ("enemy_model", "Enemy Model"),
+            ("boss_model", "Boss Model"),
+        ):
+            table.add_row(label, str(profile.get(key, "-") or "-"))
+        testing_focus = profile.get("testing_focus") or []
+        conflicts = profile.get("conflicts") or []
+        table.add_row("Testing Focus", ", ".join(testing_focus) if testing_focus else "-")
+        table.add_row("Confirmed", "yes" if profile.get("confirmed") else "no")
+        table.add_row("Confidence", f"{float(profile.get('confidence', 0.0) or 0.0):.2f}")
+        table.add_row("Conflicts", ", ".join(conflicts) if conflicts else "-")
+        reasons = profile.get("reasons") or []
+        if reasons:
+            table.add_row("Reasons", " | ".join(str(item) for item in reasons[:3]))
+        self.console.print(Panel(table, title="Gameplay Intent", border_style="yellow"))
 
     def session_list_panel(self, sessions: list[Any]) -> None:
         t = Table(show_header=True, box=None, padding=(0, 1))
@@ -450,6 +567,17 @@ class ChatDisplay:
             self.add_activity("assistant: requested tools")
         elif event.kind == "context_compacted":
             self.add_activity(event.message)
+        elif event.kind == "intent_inferred":
+            profile = dict(event.data.get("profile") or {})
+            if profile:
+                self.intent_profile = profile
+                genre = profile.get("genre", "") or "unresolved"
+                self.add_activity(f"intent: {genre}")
+        elif event.kind == "intent_conflict_detected":
+            profile = dict(event.data.get("profile") or {})
+            if profile:
+                self.intent_profile = profile
+            self.add_activity(f"intent conflict: {event.message}")
 
     def error(self, msg: str) -> None:
         self.add_activity(f"error: {msg}")

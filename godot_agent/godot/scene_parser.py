@@ -2,6 +2,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from godot_agent.godot.variant_codec import parse_variant
+
 
 @dataclass
 class ExtResource:
@@ -17,6 +19,15 @@ class TscnNode:
     parent: str | None = None
     properties: dict[str, str] = field(default_factory=dict)
     instance: str | None = None
+
+    def property_value(self, key: str, default: object | None = None, *, typed: bool = False) -> object | None:
+        raw = self.properties.get(key)
+        if raw is None:
+            return default
+        return parse_variant(raw) if typed else raw
+
+    def typed_properties(self) -> dict[str, object]:
+        return {key: parse_variant(value) for key, value in self.properties.items()}
 
 
 @dataclass

@@ -209,3 +209,34 @@ class TestConversationEngine:
 
         assert response == ""
         mock_client.chat.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_manual_skill_override_narrows_tools_without_keyword_match(self, tmp_path):
+        (tmp_path / "project.godot").write_text('config_version=5\n\n[application]\nconfig/name="SkillOverride"\n')
+        mock_client = AsyncMock(spec=LLMClient)
+        mock_client.chat = AsyncMock(return_value=_resp(Message.assistant(content="Done")))
+        registry = ToolRegistry()
+        for name in ("read_scene", "write_scene_property", "edit_script", "run_shell"):
+            registry.register(NamedTool(name))
+        prompt_assembler = PromptAssembler(PromptContext(project_root=tmp_path, mode="apply"))
+        engine = ConversationEngine(
+            client=mock_client,
+            registry=registry,
+            system_prompt=prompt_assembler.build(),
+            project_path=str(tmp_path),
+            prompt_assembler=prompt_assembler,
+            auto_validate=False,
+            mode="apply",
+        )
+        engine.base_allowed_tools = {"read_scene", "write_scene_property", "edit_script", "run_shell"}
+        engine.allowed_tools = set(engine.base_allowed_tools)
+        engine.skill_mode = "manual"
+        engine.enabled_skills = ["collision"]
+
+        await engine.submit("Inspect the player scene")
+
+        tool_schemas = mock_client.chat.call_args.args[1]
+        tool_names = {schema["function"]["name"] for schema in tool_schemas}
+        assert "read_scene" in tool_names
+        assert "write_scene_property" in tool_names
+        assert "run_shell" not in tool_names

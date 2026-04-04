@@ -4,7 +4,11 @@ import pytest
 
 from godot_agent.tools.analysis_tools import (
     CheckConsistencyTool,
+    PlanUILayoutTool,
     ProjectDependencyGraphTool,
+    ScaffoldAudioTool,
+    ValidateAudioNodesTool,
+    ValidateUILayoutTool,
     ValidateProjectTool,
 )
 from godot_agent.tools.file_ops import clear_project_root, set_project_root
@@ -45,3 +49,33 @@ async def test_dependency_graph_tool(analysis_project: Path):
     result = await tool.execute(tool.Input(project_path=str(analysis_project)))
     assert result.error is None
     assert "res://main.tscn" in result.output.summary
+
+
+@pytest.mark.asyncio
+async def test_ui_and_audio_analysis_tools(analysis_project: Path):
+    scene_path = analysis_project / "menu.tscn"
+    scene_path.write_text(
+        '[gd_scene format=3]\n\n'
+        '[node name="Menu" type="Control"]\n'
+        '[node name="PlayButton" type="Button" parent="."]\n'
+        'custom_minimum_size = Vector2(100, 24)\n'
+        '[node name="ClickAudio" type="AudioStreamPlayer" parent="."]\n'
+    )
+
+    ui_plan = PlanUILayoutTool()
+    ui_validate = ValidateUILayoutTool()
+    audio_scaffold = ScaffoldAudioTool()
+    audio_validate = ValidateAudioNodesTool()
+
+    ui_plan_result = await ui_plan.execute(ui_plan.Input(pattern="pause_menu"))
+    ui_validate_result = await ui_validate.execute(ui_validate.Input(path=str(scene_path)))
+    audio_scaffold_result = await audio_scaffold.execute(audio_scaffold.Input(pattern="minimal"))
+    audio_validate_result = await audio_validate.execute(
+        audio_validate.Input(path=str(scene_path), project_path=str(analysis_project))
+    )
+
+    assert ui_plan_result.error is None
+    assert ui_plan_result.output.nodes
+    assert ui_validate_result.output.warning_count >= 1
+    assert audio_scaffold_result.output.nodes
+    assert audio_validate_result.output.warning_count >= 1

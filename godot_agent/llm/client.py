@@ -5,7 +5,7 @@ import logging
 import httpx
 
 from godot_agent.llm.adapters import get_provider_adapter
-from godot_agent.llm.types import ChatResponse, LLMConfig, Message, TokenUsage, ToolCall
+from godot_agent.llm.types import ChatResponse, ComputerUseResponse, LLMConfig, Message, TokenUsage, ToolCall
 from godot_agent.runtime.providers import infer_provider
 
 log = logging.getLogger(__name__)
@@ -93,6 +93,31 @@ class LLMClient:
             total_tokens=usage_data.get("total_tokens", 0),
         )
         return ChatResponse(message=msg, usage=usage)
+
+    async def computer_use(
+        self,
+        prompt: str,
+        *,
+        screenshot_b64: str | None = None,
+        previous_response_id: str | None = None,
+        call_id: str | None = None,
+        detail: str = "original",
+    ) -> ComputerUseResponse:
+        body = self.adapter.build_computer_use_request(
+            self.config,
+            prompt=prompt,
+            screenshot_b64=screenshot_b64,
+            previous_response_id=previous_response_id,
+            call_id=call_id,
+            detail=detail,
+        )
+        resp = await self._http.post(
+            self.adapter.build_responses_url(self.config),
+            headers=self._build_headers(),
+            json=body,
+        )
+        resp.raise_for_status()
+        return self.adapter.parse_computer_use_response(resp.json())
 
     async def close(self):
         await self._http.aclose()

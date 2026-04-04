@@ -10,6 +10,7 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.formatted_text import HTML
 
+from godot_agent.prompts.skill_selector import available_skills
 from godot_agent.runtime.providers import PROVIDER_PRESETS, REASONING_EFFORT_LEVELS
 
 
@@ -93,6 +94,8 @@ class CommandCompleter(Completer):
         ("/provider ", "show or switch provider"),
         ("/model ", "show or switch model"),
         ("/effort ", "show or switch reasoning effort"),
+        ("/skills ", "list or override internal skills"),
+        ("/intent ", "show or confirm gameplay intent"),
         ("/info", "show project details"),
         ("/status", "show provider, model, and auth"),
         ("/usage", "show token usage"),
@@ -111,6 +114,8 @@ class CommandCompleter(Completer):
 
     SETTINGS = [
         "api_key", "base_url", "provider", "model", "reasoning_effort", "oauth_token",
+        "computer_use", "computer_use_environment", "computer_use_display_width", "computer_use_display_height",
+        "skill_mode", "enabled_skills", "disabled_skills",
         "max_turns", "max_tokens", "temperature", "godot_path",
         "language", "verbosity", "mode", "auto_validate", "auto_commit",
         "screenshot_max_iterations", "token_budget", "safety", "streaming",
@@ -122,7 +127,6 @@ class CommandCompleter(Completer):
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
-        word = document.get_word_before_cursor()
 
         # /set <key> completion
         if text.startswith("/set "):
@@ -146,6 +150,45 @@ class CommandCompleter(Completer):
             for effort in REASONING_EFFORT_LEVELS:
                 if effort.startswith(prefix.lower()):
                     yield Completion(effort, start_position=-len(prefix))
+            return
+
+        if text.startswith("/skills on "):
+            prefix = text[len("/skills on "):]
+            for skill in available_skills():
+                if skill.key.startswith(prefix.lower()):
+                    yield Completion(skill.key, start_position=-len(prefix), display_meta=skill.summary)
+            return
+
+        if text.startswith("/skills off "):
+            prefix = text[len("/skills off "):]
+            for skill in available_skills():
+                if skill.key.startswith(prefix.lower()):
+                    yield Completion(skill.key, start_position=-len(prefix), display_meta=skill.summary)
+            return
+
+        if text.startswith("/skills "):
+            prefix = _suffix_after_first_space(text)
+            for value, desc in (
+                ("list", "show available and active skills"),
+                ("on", "force-enable a skill"),
+                ("off", "force-disable a skill"),
+                ("auto", "clear overrides and use auto-selection"),
+                ("clear", "clear all skill overrides"),
+            ):
+                if value.startswith(prefix.lower()):
+                    yield Completion(value, start_position=-len(prefix), display_meta=desc)
+            return
+
+        if text.startswith("/intent "):
+            prefix = _suffix_after_first_space(text)
+            for value, desc in (
+                ("status", "show the current gameplay intent profile"),
+                ("confirm", "persist the current inferred profile"),
+                ("edit", "open guided gameplay intent questions"),
+                ("clear", "clear the confirmed gameplay intent"),
+            ):
+                if value.startswith(prefix.lower()):
+                    yield Completion(value, start_position=-len(prefix), display_meta=desc)
             return
 
         # Command completion

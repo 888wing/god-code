@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = ROOT / "godot_agent"
+ENTRYPOINT_PATH = PACKAGE_ROOT / "entrypoint.py"
 PYPROJECT_PATH = ROOT / "pyproject.toml"
 README_PATH = ROOT / "README.md"
 
@@ -86,8 +87,8 @@ def _module_uses_dataclass_slots(module: ast.Module) -> bool:
 
 
 def test_requires_python_matches_documented_floor() -> None:
-    assert _declared_min_python() == (3, 9)
-    assert "Python 3.9+" in README_PATH.read_text(encoding="utf-8")
+    assert _declared_min_python() == (3, 12)
+    assert "Python 3.12+" in README_PATH.read_text(encoding="utf-8")
 
 
 def test_declared_python_floor_covers_runtime_features() -> None:
@@ -127,3 +128,9 @@ def test_declared_python_floor_parses_package_syntax() -> None:
         "Package source uses syntax newer than declared requires-python:\n"
         + "\n".join(syntax_errors)
     )
+
+
+def test_console_script_uses_legacy_safe_entrypoint() -> None:
+    project = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))["project"]
+    assert project["scripts"]["god-code"] == "godot_agent.entrypoint:main"
+    ast.parse(ENTRYPOINT_PATH.read_text(encoding="utf-8"), filename=str(ENTRYPOINT_PATH), feature_version=(3, 9))

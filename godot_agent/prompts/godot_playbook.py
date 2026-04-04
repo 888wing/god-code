@@ -139,6 +139,26 @@ WARNING: create_tween() bound to node — freed when node freed.
 Use get_tree().create_tween() for independent tweens.
 """),
 
+("Audio System", ["audio", "sound", "music", "sfx", "bgm", "bus", "audiostreamplayer", "volume", "pitch"], """
+Audio node types:
+- AudioStreamPlayer: non-positional music/UI/narration
+- AudioStreamPlayer2D: positional 2D audio
+- AudioStreamPlayer3D: positional 3D audio
+
+Demo-friendly bus layout:
+- Master
+- Music
+- SFX
+- UI
+
+Rules:
+- Set the bus explicitly on each audio player
+- Music usually loops; SFX usually does not
+- Use volume_db, not linear volume, for balancing
+- Add small pitch variation to repeated SFX when appropriate
+- Preload or assign streams before play(), not during the same frame if avoidable
+"""),
+
 ("Input Handling", ["input", "key", "action", "move", "controller", "keyboard"], """
 ALWAYS use Input Map actions, NEVER hardcode keys:
 if Input.is_action_just_pressed("jump"): jump()

@@ -36,6 +36,23 @@ def test_effort_completion_lists_known_levels():
     assert "xhigh" in completions
 
 
+def test_skills_command_completion_lists_subcommands():
+    completions = _completion_texts("/skills ")
+    assert "on" in completions
+    assert "auto" in completions
+
+
+def test_skills_on_completion_lists_skill_ids():
+    completions = _completion_texts("/skills on c")
+    assert "collision" in completions
+
+
+def test_intent_command_completion_lists_subcommands():
+    completions = _completion_texts("/intent ")
+    assert "status" in completions
+    assert "confirm" in completions
+
+
 def test_provider_completion_handles_trailing_space_without_crashing():
     completions = _completion_texts("/provider ")
     assert "anthropic" in completions
@@ -90,6 +107,9 @@ def test_resolve_menu_choice_accepts_index_value_and_alias():
         "/provider  ",
         "/effort ",
         "/effort  ",
+        "/skills ",
+        "/skills on ",
+        "/skills off ",
         "/set ",
         "/set  ",
         "/resume ",

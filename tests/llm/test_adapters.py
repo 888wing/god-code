@@ -35,3 +35,31 @@ def test_anthropic_adapter_adds_thinking_without_reasoning_effort():
     )
     assert body["thinking"] == {"type": "enabled", "budget_tokens": 4096}
     assert "reasoning_effort" not in body
+
+
+def test_openai_adapter_builds_computer_use_request():
+    adapter = get_provider_adapter("openai")
+    body = adapter.build_computer_use_request(
+        LLMConfig(api_key="key", provider="openai", model="gpt-5.4", computer_use=True),
+        prompt="Open the inventory.",
+    )
+    assert body["tools"][0]["type"] == "computer"
+    assert body["input"] == "Open the inventory."
+
+
+def test_openai_adapter_parses_computer_use_response():
+    adapter = get_provider_adapter("openai")
+    parsed = adapter.parse_computer_use_response({
+        "id": "resp_123",
+        "output": [
+            {
+                "type": "computer_call",
+                "call_id": "call_1",
+                "actions": [{"type": "click", "x": 10, "y": 20}],
+                "status": "completed",
+            }
+        ],
+    })
+    assert parsed.response_id == "resp_123"
+    assert parsed.computer_calls[0].call_id == "call_1"
+    assert parsed.computer_calls[0].actions[0]["type"] == "click"

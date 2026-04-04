@@ -5,12 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from godot_agent.godot.audio_scaffolder import validate_audio_nodes
 from godot_agent.godot.consistency_checker import check_consistency
 from godot_agent.godot.dependency_graph import build_dependency_graph
 from godot_agent.godot.gdscript_linter import format_lint_report, lint_gdscript
 from godot_agent.godot.impact_analysis import ImpactAnalysisReport, analyze_change_impact, format_impact_report
 from godot_agent.godot.resource_validator import validate_resources
+from godot_agent.godot.scene_parser import parse_tscn
 from godot_agent.godot.tscn_validator import validate_tscn
+from godot_agent.godot.ui_layout_advisor import validate_ui_layout
 from godot_agent.runtime.design_memory import DesignMemory, load_design_memory
 from godot_agent.runtime.error_loop import format_validation_for_llm, validate_project
 from godot_agent.runtime.gameplay_reviewer import review_gameplay_constraints
@@ -135,7 +138,9 @@ async def review_changes(
             )
 
         if abs_path.suffix == ".tscn":
-            tscn_issues = validate_tscn(abs_path.read_text(encoding="utf-8", errors="replace"))
+            text = abs_path.read_text(encoding="utf-8", errors="replace")
+            tscn_issues = validate_tscn(text)
+            scene = parse_tscn(text)
             status = "FAIL" if any(issue.severity == "error" for issue in tscn_issues) else "PARTIAL" if tscn_issues else "PASS"
             observed = "\n".join(str(issue) for issue in tscn_issues) if tscn_issues else "Scene format validation passed."
             _append(
@@ -154,6 +159,26 @@ async def review_changes(
                 "\n".join(resource_issues) if resource_issues else "All scene resources resolved successfully.",
                 "FAIL" if resource_issues else "PASS",
             )
+
+            ui_warnings = validate_ui_layout(scene)
+            if any(node.type == "Control" or node.type.endswith("Container") for node in scene.nodes):
+                _append(
+                    report,
+                    f"Validate UI layout conventions for {rel_path}",
+                    f"validate_ui_layout {abs_path}",
+                    "\n".join(ui_warnings) if ui_warnings else "UI layout checks passed.",
+                    "PARTIAL" if ui_warnings else "PASS",
+                )
+
+            audio_warnings = validate_audio_nodes(scene, project_root)
+            if any("AudioStreamPlayer" in (node.type or "") for node in scene.nodes):
+                _append(
+                    report,
+                    f"Validate audio nodes for {rel_path}",
+                    f"validate_audio_nodes {abs_path}",
+                    "\n".join(audio_warnings) if audio_warnings else "Audio node checks passed.",
+                    "PARTIAL" if audio_warnings else "PASS",
+                )
 
     consistency = check_consistency(project_root)
     relevant_consistency = [

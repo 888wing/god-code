@@ -49,6 +49,13 @@ class TestParseTscn:
         scene = parse_tscn(SAMPLE_TSCN)
         bg = scene.nodes[1]
         assert bg.properties["color"] == "Color(0.1, 0.1, 0.1, 1)"
+        assert bg.property_value("color", typed=True) == {
+            "__type__": "Color",
+            "r": 0.1,
+            "g": 0.1,
+            "b": 0.1,
+            "a": 1,
+        }
 
     def test_parse_connections(self):
         scene = parse_tscn(SAMPLE_TSCN)

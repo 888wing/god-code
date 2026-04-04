@@ -154,6 +154,12 @@ def should_send_reasoning_effort(provider: str, model: str, effort: str) -> bool
     return provider in {"openai", "gemini"}
 
 
+def supports_computer_use(provider: str, model: str) -> bool:
+    provider = normalize_provider(provider)
+    canonical = canonical_model_name(model)
+    return provider == "openai" and canonical.startswith("gpt-5.4")
+
+
 def anthropic_thinking_budget(effort: str) -> int | None:
     effort = (effort or "").strip().lower()
     return {

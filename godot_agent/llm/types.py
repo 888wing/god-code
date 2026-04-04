@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from godot_agent.runtime.providers import canonical_model_name
@@ -105,6 +105,22 @@ class ChatResponse:
 
 
 @dataclass
+class ComputerUseCall:
+    call_id: str
+    actions: list[dict[str, Any]] = field(default_factory=list)
+    pending_safety_checks: list[dict[str, Any]] = field(default_factory=list)
+    status: str = ""
+
+
+@dataclass
+class ComputerUseResponse:
+    response_id: str
+    output_text: str = ""
+    computer_calls: list[ComputerUseCall] = field(default_factory=list)
+    output_items: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
 class LLMConfig:
     api_key: str
     base_url: str = "https://api.openai.com/v1"
@@ -114,6 +130,10 @@ class LLMConfig:
     oauth_token: str | None = None
     max_tokens: int = 4096
     temperature: float = 0.0
+    computer_use: bool = False
+    computer_use_environment: str = "browser"
+    computer_use_display_width: int = 1024
+    computer_use_display_height: int = 768
 
 
 def _pricing_for_model(model: str) -> tuple[float, float]:

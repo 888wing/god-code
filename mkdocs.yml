@@ -1,0 +1,48 @@
+site_name: God Code
+site_description: Godot-aware AI coding agent for original game development
+site_url: https://888wing.github.io/god-code/
+repo_url: https://github.com/888wing/god-code
+repo_name: 888wing/god-code
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Install: getting-started/install.md
+      - First Run: getting-started/first-run.md
+      - Empty Project To First Verified Change: empty-project-to-first-verified-change.md
+  - CLI Guide:
+      - Chat: cli/chat.md
+      - Ask: cli/ask.md
+  - Interactive TUI:
+      - Menu And Commands: tui/menu-and-commands.md
+      - Settings And BYOK: tui/settings-and-byok.md
+  - Validation And Safety:
+      - Quality Gate: validation/quality-gate.md
+  - Providers And Models:
+      - BYOK And OAuth: providers/byok-and-oauth.md
+  - MCP:
+      - Overview: mcp/overview.md
+  - Architecture And Roadmaps:
+      - Gameplay Intent And Enemy AI Roadmap: gameplay-intent-and-enemy-ai-roadmap.md
+      - Demo-Ready Upgrade Plan: plans/2026-04-04-demo-ready-upgrade.md

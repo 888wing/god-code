@@ -16,8 +16,24 @@ from godot_agent.agents.dispatcher import AgentDispatcher
 from godot_agent.llm.client import LLMClient, LLMConfig
 from godot_agent.llm.vision import encode_image
 from godot_agent.prompts.assembler import PromptAssembler, PromptContext
+from godot_agent.prompts.skill_selector import (
+    available_skills,
+    normalize_skill_mode,
+    normalize_skill_name,
+    resolve_skills,
+    sanitize_skill_keys,
+    skill_label,
+)
 from godot_agent.runtime.config import AgentConfig, default_config_path, load_config
+from godot_agent.runtime.design_memory import GameplayIntentProfile, load_design_memory, update_design_memory
 from godot_agent.runtime.engine import ConversationEngine
+from godot_agent.runtime.intent_resolver import (
+    apply_intent_answers,
+    intent_questions_for_profile,
+    is_gameplay_architecture_task,
+    resolve_gameplay_intent,
+    should_prompt_for_intent,
+)
 from godot_agent.runtime.modes import get_mode_spec, normalize_mode
 from godot_agent.runtime.providers import (
     PROVIDER_PRESETS,
@@ -29,11 +45,28 @@ from godot_agent.runtime.session import list_sessions, load_latest_session, load
 from godot_agent.tools.analysis_tools import (
     AnalyzeImpactTool,
     CheckConsistencyTool,
+    PlanUILayoutTool,
     ProjectDependencyGraphTool,
+    ScaffoldAudioTool,
+    ValidateAudioNodesTool,
+    ValidateUILayoutTool,
     ValidateProjectTool,
 )
 from godot_agent.tools.editor_bridge import GetRuntimeSnapshotTool, RunPlaytestTool
 from godot_agent.tools.image_gen import GenerateSpriteTool
+from godot_agent.tools.runtime_harness import (
+    AdvanceTicksTool,
+    CaptureViewportTool,
+    CompareBaselineTool,
+    GetEventsSinceTool,
+    GetRuntimeStateTool,
+    LoadSceneTool,
+    PressActionTool,
+    ReportFailureTool,
+    SetFixtureTool,
+    SliceSpriteSheetTool,
+    ValidateSpriteImportsTool,
+)
 from godot_agent.tools.web_search import WebSearchTool
 from godot_agent.tools.file_ops import EditFileTool, ReadFileTool, WriteFileTool
 from godot_agent.tools.git import GitTool
@@ -202,6 +235,13 @@ def _model_menu_options(cfg: AgentConfig) -> list[MenuOption]:
     return options
 
 
+def _skill_menu_options() -> list[MenuOption]:
+    return [
+        MenuOption(skill.key, skill.name, skill.summary, aliases=skill.aliases)
+        for skill in available_skills()
+    ]
+
+
 def _settings_menu_options() -> list[MenuOption]:
     descriptions = {
         "api_key": "Update the provider API key (hidden input).",
@@ -209,6 +249,10 @@ def _settings_menu_options() -> list[MenuOption]:
         "base_url": "Edit the API base URL manually.",
         "model": "Switch the active model name.",
         "reasoning_effort": "Change reasoning depth.",
+        "computer_use": "Enable OpenAI Responses computer-use requests for compatible tooling.",
+        "computer_use_environment": "Computer-use environment label (browser, desktop, vm).",
+        "computer_use_display_width": "Computer-use display width in pixels.",
+        "computer_use_display_height": "Computer-use display height in pixels.",
         "oauth_token": "Update the OAuth token (hidden input).",
         "max_turns": "Maximum tool-calling turns per request.",
         "max_tokens": "Maximum output tokens per request.",
@@ -231,6 +275,7 @@ def _settings_menu_options() -> list[MenuOption]:
         MenuOption(key, key, descriptions.get(key, ""))
         for key in (
             "api_key", "provider", "base_url", "model", "reasoning_effort", "oauth_token",
+            "computer_use", "computer_use_environment", "computer_use_display_width", "computer_use_display_height",
             "max_turns", "max_tokens", "temperature", "godot_path",
             "language", "verbosity", "mode", "auto_validate", "auto_commit",
             "screenshot_max_iterations", "token_budget", "safety", "streaming",
@@ -277,7 +322,7 @@ def _setting_value_menu_options(key: str) -> list[MenuOption] | None:
         return _provider_menu_options()
     if key == "reasoning_effort":
         return _effort_menu_options()
-    if key in {"auto_validate", "auto_commit", "streaming", "autosave_session"}:
+    if key in {"auto_validate", "auto_commit", "streaming", "autosave_session", "computer_use"}:
         return _boolean_menu_options()
     if key == "language":
         return _language_menu_options()
@@ -307,6 +352,8 @@ def _main_menu_options() -> list[MenuOption]:
         MenuOption("provider", "Switch provider", "Pick an LLM provider preset."),
         MenuOption("model", "Switch model", "Pick the current/default model or enter one manually."),
         MenuOption("effort", "Set reasoning effort", "Adjust reasoning depth."),
+        MenuOption("skills", "Manage skills", "Inspect or override the internal domain skills."),
+        MenuOption("intent", "Gameplay intent", "Inspect or confirm gameplay direction."),
         MenuOption("resume", "Resume session", "Choose a saved session to restore."),
         MenuOption("cd", "Change project directory", "Switch the active project root."),
         MenuOption("set", "Edit setting", "Choose any config field and update it."),
@@ -388,6 +435,12 @@ def _has_usable_provider_auth(cfg: AgentConfig) -> bool:
 
 def _load_or_setup_config(config_path: Path) -> AgentConfig:
     cfg = load_config(config_path)
+    try:
+        cfg.skill_mode = normalize_skill_mode(cfg.skill_mode)
+    except ValueError:
+        cfg.skill_mode = "auto"
+    cfg.enabled_skills = sanitize_skill_keys(cfg.enabled_skills)
+    cfg.disabled_skills = sanitize_skill_keys(cfg.disabled_skills)
     if _has_usable_provider_auth(cfg):
         return cfg
 
@@ -409,8 +462,13 @@ def build_registry() -> ToolRegistry:
         ReadSceneTool, SceneTreeTool, AddSceneNodeTool, WriteScenePropertyTool,
         AddSceneConnectionTool, RemoveSceneNodeTool,
         ValidateProjectTool, CheckConsistencyTool, ProjectDependencyGraphTool, AnalyzeImpactTool,
+        PlanUILayoutTool, ValidateUILayoutTool, ScaffoldAudioTool, ValidateAudioNodesTool,
         ReadDesignMemoryTool, UpdateDesignMemoryTool,
         GetRuntimeSnapshotTool, RunPlaytestTool,
+        LoadSceneTool, SetFixtureTool, PressActionTool, AdvanceTicksTool,
+        GetRuntimeStateTool, GetEventsSinceTool, CaptureViewportTool,
+        CompareBaselineTool, ReportFailureTool,
+        SliceSpriteSheetTool, ValidateSpriteImportsTool,
         GenerateSpriteTool, WebSearchTool,
     ]:
         registry.register(tool_cls())
@@ -432,6 +490,10 @@ def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
         oauth_token=config.oauth_token,
         max_tokens=config.max_tokens,
         temperature=config.temperature,
+        computer_use=config.computer_use,
+        computer_use_environment=config.computer_use_environment,
+        computer_use_display_width=config.computer_use_display_width,
+        computer_use_display_height=config.computer_use_display_height,
     )
     client = LLMClient(llm_config)
     registry = build_registry()
@@ -456,6 +518,9 @@ def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
     )
     system_prompt = prompt_assembler.build(
         user_hint="",
+        skill_mode=config.skill_mode,
+        enabled_skills=config.enabled_skills,
+        disabled_skills=config.disabled_skills,
         active_tools=[tool.name for tool in registry.list_tools() if tool.name in allowed_tools],
     )
     engine = ConversationEngine(
@@ -470,8 +535,13 @@ def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
         mode=config.mode,
         dispatcher=dispatcher,
     )
+    engine.skill_mode = config.skill_mode
+    engine.enabled_skills = list(config.enabled_skills)
+    engine.disabled_skills = list(config.disabled_skills)
     engine.base_allowed_tools = set(allowed_tools)
     engine.allowed_tools = set(allowed_tools)
+    engine._refresh_tool_scope()
+    engine._refresh_system_prompt()
     return engine
 
 
@@ -498,20 +568,61 @@ def _project_details(project_root: Path) -> tuple[bool, str | None, dict[str, st
     return True, proj.name, info
 
 
-def _toolbar_markup(cfg: AgentConfig, project_root: Path, project_name: str | None) -> str:
+def _toolbar_markup(cfg: AgentConfig, project_root: Path, project_name: str | None, intent_genre: str = "-") -> str:
     mode_label = html.escape(get_mode_spec(cfg.mode).label)
     provider = html.escape(cfg.provider)
     model = html.escape(cfg.model)
     effort = html.escape(cfg.reasoning_effort)
+    skill_mode = html.escape(cfg.skill_mode)
     project = html.escape(project_name or project_root.name or str(project_root))
+    intent = html.escape(intent_genre or "-")
     return (
         f"<b>mode</b>: {mode_label} | "
         f"<b>provider</b>: {provider} | "
         f"<b>model</b>: {model} | "
         f"<b>effort</b>: {effort} | "
+        f"<b>skills</b>: {skill_mode} | "
+        f"<b>intent</b>: {intent} | "
         f"<b>project</b>: {project} | "
         "<b>triple quotes</b>: multiline | "
         "<b>/help</b>"
+    )
+
+
+def _resolved_active_skill_keys(engine: ConversationEngine, cfg: AgentConfig) -> list[str]:
+    skills = resolve_skills(
+        engine.last_user_input,
+        engine._recent_context_files(),
+        skill_mode=cfg.skill_mode,
+        enabled_skills=cfg.enabled_skills,
+        disabled_skills=cfg.disabled_skills,
+        intent_profile=engine.intent_profile,
+    )
+    return [skill.key for skill in skills]
+
+
+def _format_skill_list(skill_keys: list[str]) -> str:
+    if not skill_keys:
+        return "-"
+    return ", ".join(skill_label(skill_key) for skill_key in skill_keys)
+
+
+def _intent_profile_dict(engine: ConversationEngine) -> dict[str, object]:
+    return engine.intent_profile.to_dict()
+
+
+def _format_intent_inline(profile: dict[str, object]) -> str:
+    genre = str(profile.get("genre", "") or "-")
+    enemy = str(profile.get("enemy_model", "") or "-")
+    confirmed = "confirmed" if profile.get("confirmed") else "inferred"
+    return f"{genre} | {enemy} | {confirmed}"
+
+
+def _persist_intent_profile(project_root: Path, profile: GameplayIntentProfile) -> None:
+    update_design_memory(
+        project_root,
+        section="gameplay_intent",
+        mapping=profile.to_dict(),
     )
 
 
@@ -588,6 +699,11 @@ def _save_chat_session(
         project_name=project_name,
         model=cfg.model,
         mode=cfg.mode,
+        skill_mode=cfg.skill_mode,
+        enabled_skills=cfg.enabled_skills,
+        disabled_skills=cfg.disabled_skills,
+        active_skills=_resolved_active_skill_keys(engine, cfg),
+        gameplay_intent=_intent_profile_dict(engine),
     )
 
 
@@ -773,6 +889,10 @@ def status():
     click.echo(f"Provider: {cfg.provider}")
     click.echo(f"Model:    {cfg.model}")
     click.echo(f"Effort:   {cfg.reasoning_effort}")
+    click.echo(f"Computer: {cfg.computer_use} ({cfg.computer_use_environment} {cfg.computer_use_display_width}x{cfg.computer_use_display_height})")
+    click.echo(f"Skills:   {cfg.skill_mode}")
+    click.echo(f"Enabled:  {_format_skill_list(cfg.enabled_skills)}")
+    click.echo(f"Disabled: {_format_skill_list(cfg.disabled_skills)}")
     click.echo(f"Base URL: {cfg.base_url}")
     click.echo(f"Godot:    {cfg.godot_path}")
     if cfg.provider == "custom" and not cfg.api_key and not cfg.oauth_token:
@@ -783,6 +903,12 @@ def status():
         click.echo(f"Auth:     API key ({cfg.api_key[:8]}...)")
     else:
         click.secho("Auth:     Not configured. Run 'god-code setup'.", fg="yellow")
+    project_root = Path.cwd()
+    if (project_root / "project.godot").exists():
+        intent = resolve_gameplay_intent(project_root, design_memory=load_design_memory(project_root))
+        click.echo(f"Intent:   {_format_intent_inline(intent.to_dict())}")
+        conflicts = ", ".join(intent.conflicts) if intent.conflicts else "-"
+        click.echo(f"Conflict: {conflicts}")
 
 
 @main.command()
@@ -805,6 +931,7 @@ def ask(prompt: str, project: str, config: str | None, image: tuple[str, ...], p
     show_rich = sys.stdout.isatty() and not plain
     engine = build_engine(cfg, project_root)
     display = ChatDisplay()
+    active_skills = _resolved_active_skill_keys(engine, cfg)
 
     has_project, proj_name, project_info = _project_details(project_root)
     if show_rich:
@@ -816,6 +943,11 @@ def ask(prompt: str, project: str, config: str | None, image: tuple[str, ...], p
             cfg.mode,
             provider=cfg.provider,
             effort=cfg.reasoning_effort,
+            skill_mode=cfg.skill_mode,
+            active_skills=active_skills,
+            enabled_skills=cfg.enabled_skills,
+            disabled_skills=cfg.disabled_skills,
+            intent_profile=_intent_profile_dict(engine),
         )
         display.update_project_info(project_info)
         _wire_engine_callbacks(engine, display, cfg)
@@ -875,6 +1007,8 @@ def chat(project: str = ".", config: str | None = None):
     session_id = str(uuid.uuid4())[:8]
     has_project, proj_name, project_info = _project_details(project_root)
 
+    engine = build_engine(cfg, project_root)
+    _wire_engine_callbacks(engine, display, cfg)
     display.welcome(
         session_id,
         cfg.model,
@@ -883,11 +1017,14 @@ def chat(project: str = ".", config: str | None = None):
         cfg.mode,
         provider=cfg.provider,
         effort=cfg.reasoning_effort,
+        skill_mode=cfg.skill_mode,
+        active_skills=_resolved_active_skill_keys(engine, cfg),
+        enabled_skills=cfg.enabled_skills,
+        disabled_skills=cfg.disabled_skills,
+        intent_profile=_intent_profile_dict(engine),
     )
     if not has_project:
         display.no_project_warning()
-    engine = build_engine(cfg, project_root)
-    _wire_engine_callbacks(engine, display, cfg)
 
     # Auto-scan project on entry
     if has_project:
@@ -896,6 +1033,8 @@ def chat(project: str = ".", config: str | None = None):
             project_info["File Count"] = str(scan_result.file_count)
             project_info["Guide"] = scan_result.guide_file or "-"
             display.info(f"Project auto-scanned: {scan_result.file_count} files")
+        if not engine.intent_profile.confirmed and (engine.intent_profile.conflicts or engine.intent_profile.confidence < 0.8):
+            display.info("Gameplay intent is not confirmed yet. Use /intent to review or confirm the current profile.")
     display.update_project_info(project_info)
     display.workspace_snapshot(show_commands=True)
 
@@ -912,7 +1051,10 @@ def chat(project: str = ".", config: str | None = None):
     input_session = create_input_session(history_file)
     completer = CommandCompleter(project_root)
 
+    intent_checkpoint_dismissed = False
+
     def _refresh_workspace(show_commands: bool = False) -> None:
+        active_skills = _resolved_active_skill_keys(engine, cfg)
         display.configure_workspace(
             session_id=session_id,
             provider=cfg.provider,
@@ -922,6 +1064,11 @@ def chat(project: str = ".", config: str | None = None):
             project_name=proj_name,
             project_path=str(project_root),
             project_info=project_info,
+            skill_mode=cfg.skill_mode,
+            active_skills=active_skills,
+            enabled_skills=cfg.enabled_skills,
+            disabled_skills=cfg.disabled_skills,
+            intent_profile=_intent_profile_dict(engine),
         )
         display.workspace_snapshot(show_commands=show_commands)
 
@@ -933,7 +1080,7 @@ def chat(project: str = ".", config: str | None = None):
         rescan_project: bool = True,
         new_session_id: str | None = None,
     ) -> None:
-        nonlocal engine, project_root, has_project, proj_name, project_info, completer, session_id
+        nonlocal engine, project_root, has_project, proj_name, project_info, completer, session_id, intent_checkpoint_dismissed
         old_messages = engine.messages[1:] if preserve_messages else []
         previous_root = project_root
         previous_project_info = dict(project_info)
@@ -961,6 +1108,7 @@ def chat(project: str = ".", config: str | None = None):
         completer = CommandCompleter(project_root)
         if new_session_id is not None:
             session_id = new_session_id
+        intent_checkpoint_dismissed = False
 
         display.configure_workspace(
             session_id=session_id,
@@ -971,12 +1119,32 @@ def chat(project: str = ".", config: str | None = None):
             project_name=proj_name,
             project_path=str(project_root),
             project_info=project_info,
+            skill_mode=cfg.skill_mode,
+            active_skills=_resolved_active_skill_keys(engine, cfg),
+            enabled_skills=cfg.enabled_skills,
+            disabled_skills=cfg.disabled_skills,
+            intent_profile=_intent_profile_dict(engine),
         )
         if not has_project:
             display.no_project_warning()
 
+    def _intent_status_data() -> dict[str, object]:
+        profile = _intent_profile_dict(engine)
+        return {
+            "Gameplay Intent": _format_intent_inline(profile),
+            "Genre": profile.get("genre", "-") or "-",
+            "Player Control": profile.get("player_control_model", "-") or "-",
+            "Combat": profile.get("combat_model", "-") or "-",
+            "Enemy Model": profile.get("enemy_model", "-") or "-",
+            "Boss Model": profile.get("boss_model", "-") or "-",
+            "Testing Focus": ", ".join(profile.get("testing_focus") or []) or "-",
+            "Intent Confirmed": "yes" if profile.get("confirmed") else "no",
+            "Intent Confidence": f"{float(profile.get('confidence', 0.0) or 0.0):.2f}",
+            "Intent Conflicts": ", ".join(profile.get("conflicts") or []) or "-",
+        }
+
     def _toolbar() -> str:
-        return _toolbar_markup(cfg, project_root, proj_name)
+        return _toolbar_markup(cfg, project_root, proj_name, str(_intent_profile_dict(engine).get("genre", "-") or "-"))
 
     async def _prompt_menu_choice(
         title: str,
@@ -1187,11 +1355,21 @@ def chat(project: str = ".", config: str | None = None):
                 cfg.mode = normalize_mode(record.mode)
             except ValueError:
                 pass
+        if record.skill_mode:
+            try:
+                cfg.skill_mode = normalize_skill_mode(record.skill_mode)
+            except ValueError:
+                cfg.skill_mode = "auto"
+        cfg.enabled_skills = sanitize_skill_keys(record.enabled_skills)
+        cfg.disabled_skills = sanitize_skill_keys(record.disabled_skills)
 
         resume_root = Path(record.project_path).expanduser().resolve() if record.project_path else project_root
         if record.project_path and not resume_root.exists():
             display.error(f"Saved project path no longer exists: {record.project_path}")
             return False
+
+        if record.gameplay_intent:
+            _persist_intent_profile(resume_root, GameplayIntentProfile(**record.gameplay_intent))
 
         loaded_messages = record.messages[1:] if record.messages and record.messages[0].role == "system" else record.messages
         await _replace_engine(
@@ -1223,6 +1401,144 @@ def chat(project: str = ".", config: str | None = None):
         if choice is None:
             return False
         return await _apply_setting_value("reasoning_effort", choice)
+
+    def _skill_state_updates() -> dict[str, object]:
+        return {
+            "skill_mode": cfg.skill_mode,
+            "enabled_skills": list(cfg.enabled_skills),
+            "disabled_skills": list(cfg.disabled_skills),
+        }
+
+    async def _rebuild_for_skills(message: str) -> bool:
+        _persist_config_updates(config_path, _skill_state_updates())
+        await _replace_engine(project_root, preserve_messages=True, rescan_project=False)
+        display.success(message)
+        _refresh_workspace()
+        return True
+
+    async def _show_skills_panel() -> bool:
+        display.skills_panel(
+            available=_skill_menu_options(),
+            skill_mode=cfg.skill_mode,
+            active_skills=_resolved_active_skill_keys(engine, cfg),
+            enabled_skills=cfg.enabled_skills,
+            disabled_skills=cfg.disabled_skills,
+        )
+        return True
+
+    async def _show_intent_panel() -> bool:
+        engine.refresh_intent_profile()
+        display.intent_panel(_intent_profile_dict(engine))
+        return True
+
+    async def _edit_intent_profile(*, checkpoint: bool = False) -> bool:
+        nonlocal intent_checkpoint_dismissed
+        if not has_project:
+            display.error("No project.godot found in the current directory.")
+            return False
+
+        current_profile = engine.refresh_intent_profile(engine.last_user_input)
+        if checkpoint:
+            display.info("Gameplay intent needs confirmation for this gameplay-level task.")
+        display.intent_panel(current_profile.to_dict())
+
+        answers: dict[str, str] = {}
+        for question in intent_questions_for_profile(current_profile)[:3]:
+            options = [
+                MenuOption(option.value, option.label, option.description, aliases=(option.value,))
+                for option in question.options
+            ]
+            current_value = answers.get(question.key) or getattr(current_profile, question.key) or None
+            choice = await _prompt_menu_choice(
+                f"Intent: {question.key.replace('_', ' ').title()}",
+                options,
+                current_value=current_value,
+                prompt_hint=question.prompt,
+            )
+            if choice is None:
+                if checkpoint:
+                    intent_checkpoint_dismissed = True
+                    display.info("Intent checkpoint skipped. Continuing with inferred profile.")
+                return False
+            answers[question.key] = choice
+
+        updated = apply_intent_answers(current_profile, answers)
+        _persist_intent_profile(project_root, updated)
+        await _replace_engine(project_root, preserve_messages=True, rescan_project=False)
+        intent_checkpoint_dismissed = False
+        display.success("Gameplay intent confirmed.")
+        display.intent_panel(_intent_profile_dict(engine))
+        _refresh_workspace()
+        return True
+
+    async def _apply_intent_command(action: str) -> bool:
+        nonlocal intent_checkpoint_dismissed
+        normalized = action.strip().lower()
+        if normalized in {"", "status"}:
+            return await _show_intent_panel()
+        if normalized == "confirm":
+            profile = engine.refresh_intent_profile(engine.last_user_input)
+            if profile.is_empty:
+                display.error("No gameplay intent could be inferred yet.")
+                return False
+            updated = GameplayIntentProfile(**profile.to_dict())
+            updated.confirmed = True
+            updated.confidence = 1.0
+            _persist_intent_profile(project_root, updated)
+            await _replace_engine(project_root, preserve_messages=True, rescan_project=False)
+            intent_checkpoint_dismissed = False
+            display.success("Gameplay intent confirmed.")
+            display.intent_panel(_intent_profile_dict(engine))
+            _refresh_workspace()
+            return True
+        if normalized == "edit":
+            return await _edit_intent_profile(checkpoint=False)
+        if normalized == "clear":
+            _persist_intent_profile(project_root, GameplayIntentProfile())
+            await _replace_engine(project_root, preserve_messages=True, rescan_project=False)
+            intent_checkpoint_dismissed = False
+            display.success("Gameplay intent cleared.")
+            _refresh_workspace()
+            return True
+        display.error("Usage: /intent [status|confirm|edit|clear]")
+        return False
+
+    async def _apply_skill_command(action: str, raw_skill_name: str | None = None) -> bool:
+        if action in {"", "list"}:
+            return await _show_skills_panel()
+        if action == "auto":
+            cfg.skill_mode = "auto"
+            cfg.enabled_skills = []
+            cfg.disabled_skills = []
+            return await _rebuild_for_skills("Skill overrides cleared. Auto selection restored.")
+        if action == "clear":
+            cfg.enabled_skills = []
+            cfg.disabled_skills = []
+            cfg.skill_mode = "auto"
+            return await _rebuild_for_skills("Skill overrides cleared.")
+
+        skill_key = normalize_skill_name(raw_skill_name)
+        if skill_key is None:
+            available = ", ".join(skill.key for skill in available_skills())
+            display.error(f"Unknown skill: {raw_skill_name}. Available: {available}")
+            return False
+
+        if action == "on":
+            cfg.skill_mode = "hybrid"
+            cfg.disabled_skills = [item for item in cfg.disabled_skills if item != skill_key]
+            if skill_key not in cfg.enabled_skills:
+                cfg.enabled_skills = [*cfg.enabled_skills, skill_key]
+            return await _rebuild_for_skills(f"Skill enabled: {skill_label(skill_key)}")
+
+        if action == "off":
+            cfg.skill_mode = "hybrid"
+            cfg.enabled_skills = [item for item in cfg.enabled_skills if item != skill_key]
+            if skill_key not in cfg.disabled_skills:
+                cfg.disabled_skills = [*cfg.disabled_skills, skill_key]
+            return await _rebuild_for_skills(f"Skill disabled: {skill_label(skill_key)}")
+
+        display.error("Usage: /skills [list|on <name>|off <name>|auto|clear]")
+        return False
 
     async def _show_model_menu() -> bool:
         choice = await _prompt_menu_choice("Model", _model_menu_options(cfg), current_value=cfg.model)
@@ -1345,6 +1661,12 @@ def chat(project: str = ".", config: str | None = None):
         if choice == "effort":
             await _show_effort_menu()
             return "handled"
+        if choice == "skills":
+            await _show_skills_panel()
+            return "handled"
+        if choice == "intent":
+            await _show_intent_panel()
+            return "handled"
         if choice == "resume":
             await _show_resume_menu()
             return "handled"
@@ -1366,12 +1688,18 @@ def chat(project: str = ".", config: str | None = None):
                 "Provider": cfg.provider,
                 "Model": cfg.model,
                 "Effort": cfg.reasoning_effort,
+                "Computer Use": f"{cfg.computer_use} ({cfg.computer_use_environment} {cfg.computer_use_display_width}x{cfg.computer_use_display_height})",
+                "Skill Mode": cfg.skill_mode,
+                "Active Skills": _format_skill_list(_resolved_active_skill_keys(engine, cfg)),
+                "Enabled Skills": _format_skill_list(cfg.enabled_skills),
+                "Disabled Skills": _format_skill_list(cfg.disabled_skills),
                 "Mode": cfg.mode,
                 "Project": str(project_root),
                 "Godot": cfg.godot_path,
                 "Auth": auth,
                 "Language": cfg.language,
                 "Verbosity": cfg.verbosity,
+                **_intent_status_data(),
             })
             return "handled"
         if choice == "settings":
@@ -1396,6 +1724,9 @@ def chat(project: str = ".", config: str | None = None):
     async def _loop() -> None:
         nonlocal engine, in_multiline, multiline_buffer
         try:
+            if has_project and engine.intent_profile.conflicts:
+                await _edit_intent_profile(checkpoint=True)
+
             while True:
                 try:
                     if in_multiline:
@@ -1529,6 +1860,25 @@ def chat(project: str = ".", config: str | None = None):
                     await _apply_setting_value("reasoning_effort", effort_arg)
                     continue
 
+                skills_arg = _command_argument(user_input, "/skills")
+                if cmd == "/skills":
+                    await _show_skills_panel()
+                    continue
+                if skills_arg is not None:
+                    parts = skills_arg.split(None, 1)
+                    action = parts[0].lower() if parts else ""
+                    skill_name = parts[1] if len(parts) > 1 else None
+                    await _apply_skill_command(action, skill_name)
+                    continue
+
+                intent_arg = _command_argument(user_input, "/intent")
+                if cmd == "/intent":
+                    await _show_intent_panel()
+                    continue
+                if intent_arg is not None:
+                    await _apply_intent_command(intent_arg or "status")
+                    continue
+
                 if cmd == "/usage":
                     sess = engine.session_usage
                     cost = sess.cost_estimate(cfg.model)
@@ -1550,12 +1900,18 @@ def chat(project: str = ".", config: str | None = None):
                         "Provider": cfg.provider,
                         "Model": cfg.model,
                         "Effort": cfg.reasoning_effort,
+                        "Computer Use": f"{cfg.computer_use} ({cfg.computer_use_environment} {cfg.computer_use_display_width}x{cfg.computer_use_display_height})",
+                        "Skill Mode": cfg.skill_mode,
+                        "Active Skills": _format_skill_list(_resolved_active_skill_keys(engine, cfg)),
+                        "Enabled Skills": _format_skill_list(cfg.enabled_skills),
+                        "Disabled Skills": _format_skill_list(cfg.disabled_skills),
                         "Mode": cfg.mode,
                         "Project": str(project_root),
                         "Godot": cfg.godot_path,
                         "Auth": auth,
                         "Language": cfg.language,
                         "Verbosity": cfg.verbosity,
+                        **_intent_status_data(),
                     })
                     continue
 
@@ -1593,6 +1949,16 @@ def chat(project: str = ".", config: str | None = None):
 
                 # Regular message → send to LLM
                 try:
+                    engine.refresh_intent_profile(user_input)
+                    if (
+                        has_project
+                        and not intent_checkpoint_dismissed
+                        and should_prompt_for_intent(engine.intent_profile, user_hint=user_input)
+                        and is_gameplay_architecture_task(user_input)
+                    ):
+                        await _edit_intent_profile(checkpoint=True)
+                        engine.refresh_intent_profile(user_input)
+                        _refresh_workspace()
                     if cfg.streaming and engine.on_stream_chunk:
                         response = await engine.submit(user_input)
                     else:

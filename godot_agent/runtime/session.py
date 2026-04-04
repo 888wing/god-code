@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from godot_agent.llm.client import Message
 
@@ -18,6 +19,11 @@ class SessionRecord:
     project_name: str | None = None
     model: str | None = None
     mode: str | None = None
+    skill_mode: str | None = None
+    enabled_skills: list[str] = field(default_factory=list)
+    disabled_skills: list[str] = field(default_factory=list)
+    active_skills: list[str] = field(default_factory=list)
+    gameplay_intent: dict[str, Any] = field(default_factory=dict)
     title: str = ""
     summary: str = ""
 
@@ -45,6 +51,11 @@ def save_session(
     project_name: str | None = None,
     model: str | None = None,
     mode: str | None = None,
+    skill_mode: str | None = None,
+    enabled_skills: list[str] | None = None,
+    disabled_skills: list[str] | None = None,
+    active_skills: list[str] | None = None,
+    gameplay_intent: dict[str, Any] | None = None,
 ) -> Path:
     """Persist conversation messages to a JSON file on disk.
 
@@ -62,6 +73,11 @@ def save_session(
         "project_name": project_name,
         "model": model,
         "mode": mode,
+        "skill_mode": skill_mode,
+        "enabled_skills": list(enabled_skills or []),
+        "disabled_skills": list(disabled_skills or []),
+        "active_skills": list(active_skills or []),
+        "gameplay_intent": dict(gameplay_intent or {}),
         "message_count": len(messages),
         "title": _session_title(messages),
         "summary": _session_summary(messages),
@@ -84,6 +100,11 @@ def _record_from_data(data: dict, fallback_session_id: str = "") -> SessionRecor
         project_name=data.get("project_name"),
         model=data.get("model"),
         mode=data.get("mode"),
+        skill_mode=data.get("skill_mode"),
+        enabled_skills=list(data.get("enabled_skills") or []),
+        disabled_skills=list(data.get("disabled_skills") or []),
+        active_skills=list(data.get("active_skills") or []),
+        gameplay_intent=dict(data.get("gameplay_intent") or {}),
         title=data.get("title") or _session_title(messages),
         summary=data.get("summary") or _session_summary(messages),
     )

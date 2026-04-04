@@ -2,7 +2,7 @@
 name = "god-code"
 version = "0.6.1"
 description = "AI coding agent specialized for Godot game development"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 license = {text = "GPL-3.0-or-later"}
 authors = [{name = "chuisiufai"}]
 dependencies = [
@@ -24,9 +24,12 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-mock>=3.14",
 ]
+docs = [
+    "mkdocs-material>=9.6",
+]
 
 [project.scripts]
-god-code = "godot_agent.cli:main"
+god-code = "godot_agent.entrypoint:main"
 
 [project.urls]
 Homepage = "https://github.com/888wing/god-code"

@@ -78,3 +78,16 @@ def test_prompt_assembler_includes_collision_skill_when_relevant(tmp_path):
     )
 
     assert "Collision Architecture" in prompt
+
+
+def test_prompt_assembler_respects_manual_skill_override(tmp_path):
+    (tmp_path / "project.godot").write_text('config_version=5\n\n[application]\nconfig/name="SkillOverrideGame"\n')
+    assembler = PromptAssembler(PromptContext(project_root=tmp_path))
+
+    prompt = assembler.build(
+        user_hint="inspect the player scene",
+        skill_mode="manual",
+        enabled_skills=["collision"],
+    )
+
+    assert "Collision Architecture" in prompt

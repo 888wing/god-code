@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -42,10 +43,10 @@ class UpdateDesignMemoryTool(BaseTool):
 
     class Input(BaseModel):
         project_path: str = Field(description="Absolute path to the Godot project root")
-        section: str = Field(description="Section name, e.g. pillars, control_rules, scene_ownership, mechanic_notes:combat")
+        section: str = Field(description="Section name, e.g. pillars, gameplay_intent, scene_ownership, mechanic_notes:combat")
         text: str = Field(default="", description="Freeform text value for scalar sections")
         items: list[str] = Field(default_factory=list, description="List values for list sections")
-        mapping: dict[str, str] = Field(default_factory=dict, description="Mapping values for dict sections")
+        mapping: dict[str, Any] = Field(default_factory=dict, description="Mapping values for dict sections")
         append: bool = Field(default=False, description="Append/merge into the existing section")
 
     class Output(BaseModel):

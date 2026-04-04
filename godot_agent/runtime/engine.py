@@ -12,10 +12,11 @@ from typing import TYPE_CHECKING, Any, Callable
 from godot_agent.godot.impact_analysis import ImpactAnalysisReport, analyze_change_impact
 from godot_agent.llm.client import LLMClient, Message, TokenUsage
 from godot_agent.prompts.assembler import PromptAssembler
-from godot_agent.prompts.skill_selector import narrow_tools_for_skills, select_skills
+from godot_agent.prompts.skill_selector import narrow_tools_for_skills, resolve_skills
 from godot_agent.runtime.context_manager import smart_compact, estimate_message_tokens
-from godot_agent.runtime.design_memory import DesignMemory, load_design_memory
+from godot_agent.runtime.design_memory import DesignMemory, GameplayIntentProfile, load_design_memory
 from godot_agent.runtime.events import EngineEvent
+from godot_agent.runtime.intent_resolver import resolve_gameplay_intent
 from godot_agent.runtime.playtest_harness import PlaytestReport, format_playtest_report, run_playtest_harness
 from godot_agent.runtime.quality_gate import (
     ChangeSet,
@@ -135,6 +136,7 @@ class ConversationEngine:
         self.last_playtest_report: PlaytestReport | None = None
         self.last_impact_report: ImpactAnalysisReport | None = None
         self.design_memory: DesignMemory = load_design_memory(Path(self.project_path)) if self.project_path else DesignMemory()
+        self.intent_profile: GameplayIntentProfile = GameplayIntentProfile()
         self.last_response: str = ""
         self.last_user_input: str = ""
         self.last_plan: str = ""
@@ -147,6 +149,9 @@ class ConversationEngine:
         self.base_allowed_tools: set[str] | None = None
         self.allowed_tools: set[str] | None = None
         self.active_skills: list[str] = []
+        self.skill_mode: str = "auto"
+        self.enabled_skills: list[str] = []
+        self.disabled_skills: list[str] = []
 
         # TUI callbacks
         self.on_tool_start: ToolStartCallback | None = None
@@ -157,6 +162,8 @@ class ConversationEngine:
         self.on_stream_end: Callable[[bool], None] | None = None
         self.on_commit_suggest: Callable[[], None] | None = None
         self.on_event: EventCallback | None = None
+        self._last_intent_signature: tuple[str, str, bool, tuple[str, ...]] | None = None
+        self.refresh_intent_profile()
         self._sync_registry_context()
 
     def _emit_event(self, kind: str, message: str = "", **data: Any) -> None:
@@ -182,10 +189,18 @@ class ConversationEngine:
 
     def _refresh_tool_scope(self) -> None:
         base_scope = self._base_tool_scope()
-        skills = select_skills(self.last_user_input, self._recent_context_files(), max_skills=2)
+        skills = resolve_skills(
+            self.last_user_input,
+            self._recent_context_files(),
+            max_skills=2,
+            skill_mode=self.skill_mode,
+            enabled_skills=self.enabled_skills,
+            disabled_skills=self.disabled_skills,
+            intent_profile=self.intent_profile,
+        )
         narrowed = narrow_tools_for_skills(skills, base_scope)
 
-        self.active_skills = [skill.name for skill in skills]
+        self.active_skills = [skill.key for skill in skills]
         self.allowed_tools = narrowed if narrowed is not None else base_scope
         self._sync_registry_context()
 
@@ -256,6 +271,7 @@ class ConversationEngine:
 
         if self.project_path:
             self.design_memory = load_design_memory(Path(self.project_path))
+        self.refresh_intent_profile()
         active_tools = [
             tool.name
             for tool in self.registry.list_tools()
@@ -265,9 +281,13 @@ class ConversationEngine:
             self.prompt_assembler.build(
                 user_hint=self.last_user_input,
                 file_paths=self._recent_context_files(),
+                skill_mode=self.skill_mode,
+                enabled_skills=self.enabled_skills,
+                disabled_skills=self.disabled_skills,
                 active_tools=active_tools,
                 project_scan=self.project_scan_text,
                 design_memory=self.design_memory,
+                intent_profile=self.intent_profile,
                 impact_report=self.last_impact_report,
                 runtime_snapshot=get_runtime_snapshot(),
                 quality_report=self.last_quality_report,
@@ -275,6 +295,39 @@ class ConversationEngine:
                 playtest_report=self.last_playtest_report,
             )
         )
+
+    def refresh_intent_profile(self, user_hint: str | None = None) -> GameplayIntentProfile:
+        if not self.project_path:
+            self.intent_profile = GameplayIntentProfile()
+            return self.intent_profile
+
+        self.design_memory = load_design_memory(Path(self.project_path))
+        self.intent_profile = resolve_gameplay_intent(
+            Path(self.project_path),
+            user_hint=user_hint if user_hint is not None else self.last_user_input,
+            design_memory=self.design_memory,
+            recent_files=self._recent_context_files(),
+        )
+        signature = (
+            self.intent_profile.genre,
+            self.intent_profile.enemy_model,
+            self.intent_profile.confirmed,
+            tuple(self.intent_profile.conflicts),
+        )
+        if signature != self._last_intent_signature:
+            self._last_intent_signature = signature
+            self._emit_event(
+                "intent_inferred",
+                self.intent_profile.genre or "unresolved",
+                profile=self.intent_profile.to_dict(),
+            )
+            if self.intent_profile.conflicts:
+                self._emit_event(
+                    "intent_conflict_detected",
+                    ", ".join(self.intent_profile.conflicts),
+                    profile=self.intent_profile.to_dict(),
+                )
+        return self.intent_profile
 
     async def _maybe_compact(self) -> None:
         total = sum(estimate_message_tokens(m) for m in self.messages)
@@ -321,6 +374,18 @@ class ConversationEngine:
             return args.get("command", "")
         if name in {"validate_project", "check_consistency", "project_dependency_graph", "analyze_impact", "read_design_memory", "update_design_memory", "get_runtime_snapshot", "run_playtest"}:
             return self._relative_path(args.get("project_path", ""))
+        if name in {"get_runtime_state", "get_events_since", "compare_baseline", "report_failure"}:
+            return args.get("baseline_id", "") or args.get("test_id", "") or str(args.get("tick", ""))
+        if name in {"load_scene", "capture_viewport"}:
+            return args.get("scene_path", "") or args.get("artifact_name", "")
+        if name == "press_action":
+            return args.get("action", "")
+        if name == "advance_ticks":
+            return str(args.get("count", ""))
+        if name == "set_fixture":
+            return args.get("name", "")
+        if name in {"slice_sprite_sheet", "validate_sprite_imports"}:
+            return self._relative_path(args.get("input_path", "")) or self._relative_path(args.get("metadata_path", ""))
         if name == "git":
             return args.get("command", "")[:30]
         if name == "run_shell":
@@ -399,6 +464,31 @@ class ConversationEngine:
             return report.splitlines()[0] if report else "runtime snapshot read"
         if name == "run_playtest":
             return f"playtest verdict {payload.get('verdict', 'PASS')}"
+        if name == "load_scene":
+            return f"loaded {payload.get('active_scene', '')}"
+        if name == "set_fixture":
+            return f"fixtures: {', '.join(payload.get('fixture_names', []))}"
+        if name == "press_action":
+            active = payload.get("active_inputs", [])
+            return f"active inputs: {', '.join(active) if active else 'none'}"
+        if name == "advance_ticks":
+            return f"advanced to tick {payload.get('current_tick', 0)}"
+        if name == "get_runtime_state":
+            state = payload.get("state", {})
+            return f"runtime state keys: {len(state.get('state', state) if isinstance(state, dict) else state)}"
+        if name == "get_events_since":
+            return f"events: {len(payload.get('events', []))}"
+        if name == "capture_viewport":
+            return f"captured {self._relative_path(payload.get('path', ''))}"
+        if name == "compare_baseline":
+            verdict = "matched" if payload.get("matched") else "mismatch"
+            return f"{verdict}: {payload.get('baseline_path', '').split('/')[-1]}"
+        if name == "report_failure":
+            return f"failure bundle {self._relative_path(payload.get('bundle_path', ''))}"
+        if name == "slice_sprite_sheet":
+            return f"sliced {payload.get('frame_count', 0)} frames"
+        if name == "validate_sprite_imports":
+            return "sprite imports valid" if payload.get("valid") else f"sprite import issues: {len(payload.get('issues', []))}"
         return "ok"
 
     def _record_tool_effect(self, tool_name: str, args: dict, succeeded: bool, modified_files: set[str]) -> None:
@@ -589,6 +679,7 @@ class ConversationEngine:
                 changed_files=modified_files,
                 impact_report=self.last_impact_report,
                 runtime_snapshot=get_runtime_snapshot(),
+                intent_profile=self.intent_profile,
             )
         self.last_playtest_report = report or PlaytestReport()
         self._emit_event("playtest_finished", f"Playtest verdict: {self.last_playtest_report.verdict}", verdict=self.last_playtest_report.verdict)
@@ -712,6 +803,7 @@ class ConversationEngine:
         if not _has_meaningful_text(user_input):
             return ""
         self.last_user_input = user_input
+        self.refresh_intent_profile(user_input)
         self._sync_registry_context()
         await self._maybe_run_planner(user_input)
         self.messages.append(Message.user(user_input))
@@ -722,6 +814,7 @@ class ConversationEngine:
         if not images_b64 and not _has_meaningful_text(text):
             return ""
         self.last_user_input = text
+        self.refresh_intent_profile(text)
         self._sync_registry_context()
         await self._maybe_run_planner(text)
         self.messages.append(Message.user_with_images(text, images_b64))

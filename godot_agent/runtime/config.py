@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from godot_agent.runtime.providers import infer_provider
 
@@ -37,6 +37,13 @@ class AgentConfig(BaseModel):
     extra_prompt: str = ""  # Custom user instructions appended to system prompt
     streaming: bool = True
     autosave_session: bool = True
+    computer_use: bool = False
+    computer_use_environment: str = "browser"
+    computer_use_display_width: int = 1024
+    computer_use_display_height: int = 768
+    skill_mode: str = "auto"
+    enabled_skills: list[str] = Field(default_factory=list)
+    disabled_skills: list[str] = Field(default_factory=list)
 
     # Paths
     session_dir: str = ".agent_sessions"
@@ -56,11 +63,21 @@ def load_config(path: Path | None = None, use_codex: bool = False) -> AgentConfi
         "GODOT_AGENT_OAUTH_TOKEN": "oauth_token",
         "GODOT_AGENT_GODOT_PATH": "godot_path",
         "GODOT_AGENT_LANGUAGE": "language",
+        "GODOT_AGENT_COMPUTER_USE": "computer_use",
+        "GODOT_AGENT_COMPUTER_USE_ENVIRONMENT": "computer_use_environment",
+        "GODOT_AGENT_COMPUTER_USE_WIDTH": "computer_use_display_width",
+        "GODOT_AGENT_COMPUTER_USE_HEIGHT": "computer_use_display_height",
     }
     for env_key, field_name in env_map.items():
         val = os.environ.get(env_key)
         if val is not None:
-            setattr(config, field_name, val)
+            current = getattr(config, field_name)
+            if isinstance(current, bool):
+                setattr(config, field_name, val.lower() in {"1", "true", "yes", "on"})
+            elif isinstance(current, int):
+                setattr(config, field_name, int(val))
+            else:
+                setattr(config, field_name, val)
 
     config.provider = infer_provider(
         base_url=config.base_url,

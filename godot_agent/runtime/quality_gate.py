@@ -5,13 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from godot_agent.godot.audio_scaffolder import validate_audio_nodes
 from godot_agent.godot.consistency_checker import check_consistency
 from godot_agent.godot.dependency_graph import build_dependency_graph
 from godot_agent.godot.gdscript_linter import format_lint_report, lint_gdscript
 from godot_agent.godot.impact_analysis import analyze_change_impact, format_impact_report
 from godot_agent.godot.pattern_advisor import analyze_project
 from godot_agent.godot.resource_validator import validate_resources
+from godot_agent.godot.scene_parser import parse_tscn
 from godot_agent.godot.tscn_validator import validate_tscn
+from godot_agent.godot.ui_layout_advisor import validate_ui_layout
 from godot_agent.runtime.error_loop import format_validation_for_llm, validate_project
 
 
@@ -168,6 +171,7 @@ async def run_quality_gate(
         if abs_path.suffix == ".tscn":
             text = abs_path.read_text(encoding="utf-8", errors="replace")
             issues = validate_tscn(text)
+            scene = parse_tscn(text)
             if issues:
                 error_count = len([issue for issue in issues if issue.severity == "error"])
                 warning_count = len([issue for issue in issues if issue.severity == "warning"])
@@ -210,6 +214,30 @@ async def run_quality_gate(
                     command=f"validate_resources {abs_path}",
                     status="pass",
                     summary="All referenced scene resources exist on disk.",
+                    file=rel_path,
+                )
+
+            ui_warnings = validate_ui_layout(scene)
+            if any(node.type == "Control" or node.type.endswith("Container") for node in scene.nodes):
+                _add_check(
+                    report,
+                    name="ui-layout",
+                    command=f"validate_ui_layout {abs_path}",
+                    status="warning" if ui_warnings else "pass",
+                    summary="UI layout warnings found." if ui_warnings else "UI layout checks passed.",
+                    details="\n".join(ui_warnings[:20]),
+                    file=rel_path,
+                )
+
+            audio_warnings = validate_audio_nodes(scene, project_root)
+            if any("AudioStreamPlayer" in (node.type or "") for node in scene.nodes):
+                _add_check(
+                    report,
+                    name="audio-nodes",
+                    command=f"validate_audio_nodes {abs_path}",
+                    status="warning" if audio_warnings else "pass",
+                    summary="Audio node warnings found." if audio_warnings else "Audio node checks passed.",
+                    details="\n".join(audio_warnings[:20]),
                     file=rel_path,
                 )
 

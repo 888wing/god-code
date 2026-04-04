@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -132,7 +133,7 @@ class AddSceneNodeTool(BaseTool):
         parent: str = Field(description='Parent path, e.g. "." for the root')
         name: str = Field(description="Node name")
         type: str = Field(description="Godot node type, e.g. Button or Area2D")
-        properties: dict[str, str] = Field(default_factory=dict, description="Optional property assignments")
+        properties: dict[str, Any] = Field(default_factory=dict, description="Optional property assignments")
 
     class Output(BaseModel):
         node_added: str
@@ -170,7 +171,7 @@ class WriteScenePropertyTool(BaseTool):
         path: str = Field(description="Absolute path to the .tscn file")
         node_name: str = Field(description="Target node name")
         key: str = Field(description="Property key")
-        value: str = Field(description="Serialized Godot property value")
+        value: Any = Field(description="Property value. Serialized strings still work; typed values are accepted.")
 
     class Output(BaseModel):
         updated: bool

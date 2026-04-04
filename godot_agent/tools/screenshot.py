@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from godot_agent.runtime.visual_regression import build_artifact_path, slugify_artifact_name
 from godot_agent.tools.base import BaseTool, ToolResult
 from godot_agent.tools.file_ops import _validate_path
 from godot_agent.tools.godot_cli import build_screenshot_script
@@ -25,6 +26,8 @@ class ScreenshotTool(BaseTool):
         scene_path: str = Field(description="res:// path to the scene")
         godot_path: str = Field(default="godot")
         project_path: str = Field(default=".")
+        output_path: str = Field(default="", description="Optional absolute output path for the screenshot PNG")
+        artifact_name: str = Field(default="", description="Artifact name used when output_path is omitted")
         delay_ms: int = Field(
             default=1000, description="Wait time before capture (ms)"
         )
@@ -45,11 +48,22 @@ class ScreenshotTool(BaseTool):
             if err:
                 return ToolResult(error=err)
             with tempfile.TemporaryDirectory() as tmpdir:
-                screenshot_path = str(Path(tmpdir) / "screenshot.png")
+                if input.output_path:
+                    screenshot_file, out_err = _validate_path(input.output_path)
+                    if out_err:
+                        return ToolResult(error=out_err)
+                else:
+                    artifact_name = input.artifact_name or slugify_artifact_name(Path(input.scene_path).stem or "scene")
+                    screenshot_file = build_artifact_path(
+                        project_path,
+                        category="screenshots",
+                        name=artifact_name,
+                    )
+                screenshot_file.parent.mkdir(parents=True, exist_ok=True)
                 script_path = str(Path(tmpdir) / "capture.gd")
 
                 script = build_screenshot_script(
-                    input.scene_path, screenshot_path, input.delay_ms
+                    input.scene_path, str(screenshot_file), input.delay_ms
                 )
                 Path(script_path).write_text(script)
 
@@ -64,16 +78,16 @@ class ScreenshotTool(BaseTool):
                 )
                 await asyncio.wait_for(proc.communicate(), timeout=30)
 
-                if not Path(screenshot_path).exists():
+                if not screenshot_file.exists():
                     return ToolResult(
                         error="Screenshot was not created. "
                         "Scene may have failed to load."
                     )
 
-                b64 = encode_image(screenshot_path)
+                b64 = encode_image(str(screenshot_file))
                 return ToolResult(
                     output=self.Output(
-                        image_path=screenshot_path, image_base64=b64
+                        image_path=str(screenshot_file), image_base64=b64
                     )
                 )
         except asyncio.TimeoutError:

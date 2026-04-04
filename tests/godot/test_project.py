@@ -49,3 +49,20 @@ class TestParseProjectGodot:
         proj = parse_project_godot(tmp_path / "project.godot")
         assert proj.viewport_width == 1920
         assert proj.viewport_height == 1080
+
+    def test_parse_audio_bus_layout(self, tmp_path):
+        (tmp_path / "project.godot").write_text(
+            SAMPLE_PROJECT
+            + '\n[audio]\n'
+            + 'buses/default_bus_layout="res://default_bus_layout.tres"\n'
+        )
+        (tmp_path / "default_bus_layout.tres").write_text(
+            '[gd_resource type="AudioBusLayout" format=3]\n'
+            '[bus name="Master" volume_db=0.0 send=""]\n'
+            '[bus name="Music" volume_db=0.0 send="Master"]\n'
+            '[bus name="SFX" volume_db=0.0 send="Master"]\n'
+        )
+        proj = parse_project_godot(tmp_path / "project.godot")
+
+        assert proj.audio_bus_layout == "res://default_bus_layout.tres"
+        assert proj.audio_buses == ["Master", "Music", "SFX"]

@@ -100,6 +100,17 @@ def review_gameplay_constraints(
             )
 
     if runtime_snapshot is not None:
+        evidence_status = "PASS" if runtime_snapshot.source in {"live_editor", "headless"} else "PARTIAL"
+        report.checks.append(
+            GameplayCheck(
+                description="Runtime evidence quality",
+                observed_output=(
+                    f"Runtime evidence came from {runtime_snapshot.source} "
+                    f"with level {runtime_snapshot.evidence_level}."
+                ),
+                status=evidence_status,
+            )
+        )
         status = "FAIL" if runtime_snapshot.errors else "PASS"
         report.checks.append(
             GameplayCheck(

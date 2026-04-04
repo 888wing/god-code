@@ -9,8 +9,10 @@ from godot_agent.godot.impact_analysis import ImpactAnalysisReport, format_impac
 from godot_agent.godot.project import parse_project_godot
 from godot_agent.prompts.build_discipline import BUILD_DISCIPLINE_PROMPT
 from godot_agent.prompts.knowledge_selector import format_knowledge_injection, select_sections
-from godot_agent.prompts.skill_selector import format_skill_injection, select_skills
+from godot_agent.prompts.skill_selector import format_skill_injection, resolve_skills
 from godot_agent.runtime.design_memory import DesignMemory, format_design_memory
+from godot_agent.runtime.design_memory import GameplayIntentProfile
+from godot_agent.runtime.intent_resolver import format_gameplay_intent
 from godot_agent.runtime.modes import mode_prompt
 from godot_agent.runtime.playtest_harness import PlaytestReport, format_playtest_report
 from godot_agent.runtime.quality_gate import QualityGateReport, format_quality_gate_report
@@ -65,9 +67,13 @@ class PromptAssembler:
         *,
         user_hint: str = "",
         file_paths: list[str] | None = None,
+        skill_mode: str = "auto",
+        enabled_skills: list[str] | None = None,
+        disabled_skills: list[str] | None = None,
         active_tools: list[str] | None = None,
         project_scan: str = "",
         design_memory: DesignMemory | None = None,
+        intent_profile: GameplayIntentProfile | None = None,
         impact_report: ImpactAnalysisReport | None = None,
         runtime_snapshot: RuntimeSnapshot | None = None,
         quality_report: QualityGateReport | None = None,
@@ -76,7 +82,15 @@ class PromptAssembler:
     ) -> str:
         sections = [self._static_prompt]
 
-        skills = select_skills(user_hint, file_paths, max_skills=2)
+        skills = resolve_skills(
+            user_hint,
+            file_paths,
+            max_skills=2,
+            skill_mode=skill_mode,
+            enabled_skills=enabled_skills,
+            disabled_skills=disabled_skills,
+            intent_profile=intent_profile,
+        )
         if skills:
             sections.append(format_skill_injection(skills))
 
@@ -89,6 +103,8 @@ class PromptAssembler:
 
         if design_memory is not None:
             sections.append(format_design_memory(design_memory))
+        if intent_profile is not None and not intent_profile.is_empty:
+            sections.append(format_gameplay_intent(intent_profile))
 
         if impact_report is not None:
             sections.append(format_impact_report(impact_report))

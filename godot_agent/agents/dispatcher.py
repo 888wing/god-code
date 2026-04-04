@@ -10,6 +10,8 @@ from godot_agent.agents.configs import AGENT_CONFIGS, AgentConfig
 from godot_agent.agents.results import AgentTaskResult
 from godot_agent.llm.client import LLMClient
 from godot_agent.prompts.assembler import PromptAssembler, PromptContext
+from godot_agent.runtime.design_memory import GameplayIntentProfile, load_design_memory
+from godot_agent.runtime.intent_resolver import resolve_gameplay_intent
 from godot_agent.runtime.engine import ConversationEngine
 from godot_agent.runtime.playtest_harness import format_playtest_report, run_playtest_harness
 from godot_agent.runtime.quality_gate import QualityGateReport
@@ -62,14 +64,25 @@ class AgentDispatcher:
         )
         return PromptAssembler(context)
 
+    def _resolve_intent_profile(self, user_hint: str) -> GameplayIntentProfile:
+        if not self.project_path:
+            return GameplayIntentProfile()
+        project_root = Path(self.project_path)
+        design_memory = load_design_memory(project_root)
+        return resolve_gameplay_intent(project_root, user_hint=user_hint, design_memory=design_memory)
+
     def _build_engine(self, config: AgentConfig, *, user_hint: str) -> ConversationEngine:
         registry = self._clone_registry()
         prompt_assembler = self._build_prompt_assembler(config)
         allowed_tools = self.resolve_allowed_tools(config.name)
         if prompt_assembler is not None:
+            design_memory = load_design_memory(Path(self.project_path)) if self.project_path else None
+            intent_profile = self._resolve_intent_profile(user_hint)
             system_prompt = prompt_assembler.build(
                 user_hint=user_hint,
                 active_tools=[tool.name for tool in registry.list_tools() if tool.name in allowed_tools],
+                design_memory=design_memory,
+                intent_profile=intent_profile,
             )
         else:
             system_prompt = config.prompt
@@ -144,6 +157,7 @@ class AgentDispatcher:
             project_root=Path(self.project_path),
             changed_files=changed_files,
             runtime_snapshot=get_runtime_snapshot(),
+            intent_profile=self._resolve_intent_profile(""),
         )
         return AgentTaskResult(
             role="playtest_analyst",

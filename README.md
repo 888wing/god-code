@@ -1,303 +1,401 @@
 # God Code
 
-AI coding agent specialized for Godot 4.4 game development. Unlike generic coding agents, God Code understands GDScript, .tscn scene files, collision layers, and Godot architecture patterns — and enforces incremental build-and-verify discipline.
+God Code is an AI coding agent for **Godot 4.x game development**. It understands GDScript, `.tscn` scene files, resources, collision layers, and common Godot architecture patterns, then wraps model output in a local tool pipeline with validation, review, and playtest-oriented checks.
 
-## Features
+The project is aimed at developers building **original Godot games**, not just template projects. The goal is to help you turn design intent into working gameplay without losing control of your codebase.
 
-- **29 tools**: file ops, scene manipulation, script editing, search, git, shell, Godot headless runner, screenshot, AI sprite generation, web search
-- **AI sprite generation**: pixel art pipeline with chroma key removal, auto-crop, nearest-neighbor resize, style presets
-- **Structured Outputs**: strict JSON schemas for gpt-5+ models — zero tool call parse errors
-- **Web search**: query Godot docs and web when built-in knowledge isn't enough
-- **Workspace-style chat TUI**: session snapshot, activity timeline, live tool feedback, streaming output
-- **Interaction modes**: `apply`, `plan`, `explain`, `review`, `fix` with mode-aware prompts and tool access
-- **Multi-provider**: OpenAI (gpt-5.4), Anthropic (claude-sonnet-4.6), Google (gemini), xAI (grok), OpenRouter, local models
-- **Session recovery**: autosave, `/sessions`, `/resume`, project-aware session metadata
-- **Godot-native understanding**: project.godot parser, .tscn scene parser/writer/validator, collision layer planner
-- **Code quality**: GDScript linter, cross-file consistency checker, design pattern advisor, impact analysis
-- **Smart knowledge injection**: 17 Godot Playbook sections auto-selected by task context + skill system
-- **Build discipline**: incremental build-and-verify with quality gates and automated review
-- **Security**: path containment, shell command blocking (3 safety levels), tool execution pipeline
-- **1.05M context window**: smart compression with working memory extraction at 75% threshold
+## What God Code Is Good At
+
+- Reading and editing Godot projects with **Godot-aware tools**
+- Understanding `.gd`, `.tscn`, `project.godot`, resources, signals, and scene trees
+- Keeping track of **design memory**, gameplay intent, and change impact
+- Inferring **gameplay direction** and confirming genre/combat/enemy profiles in the TUI when needed
+- Running **quality gates** after changes: validation, linting, consistency checks, dependency analysis
+- Running **reviewer / playtest-style passes** instead of stopping at “code looks fine”
+- Giving you a **workspace-style chat TUI** with sessions, menus, and live configuration
+- Exposing the same Godot-native capabilities over **MCP** for Claude Code, Codex, and other agent hosts
+
+## Who It's For
+
+- Godot developers who want an AI pair-programmer that understands game code and scene structure
+- Teams iterating on mechanics, UI flows, and gameplay systems inside an existing Godot project
+- Agent users who want **local Godot tools** via MCP without paying for an extra LLM layer
+
+## What It's Not
+
+- Not a no-code game generator
+- Not a template-only game builder
+- Not a replacement for playtesting, art direction, or core game design decisions
+- Not a sandbox for arbitrary system access outside your project root
+
+## Core Capabilities
+
+- **Interactive CLI agent**
+  `chat`, `ask`, `setup`, `status`, `info`, `tools`, session recovery, mode switching, provider/model switching, inline settings, gameplay intent checkpoints
+- **Godot-native editing**
+  scene tree inspection, scene mutation, script editing, file ops, search, project scanning
+- **Validation and review**
+  project validation, GDScript linting, scene/resource consistency, dependency graph, impact analysis, reviewer and gameplay reviewer stages
+- **Runtime and playtest tooling**
+  runtime snapshot bridge, profile-aware playtest harness, viewport capture, baseline comparison, failure bundle reporting
+- **Gameplay-intent system**
+  genre/combat/enemy-profile inference, `/intent` commands, persistent design-memory intent storage, profile-aware skill routing
+- **Asset helpers**
+  sprite generation, sprite sheet slicing, sprite import validation, visual regression artifacts
+- **Provider flexibility**
+  OpenAI, Anthropic, OpenRouter, Gemini, xAI, GLM / Z.AI, MiniMax, and custom/self-hosted endpoints
+- **MCP server**
+  expose Godot-native tools directly to other agents with no built-in LLM in the loop
 
 ## Install
+
+God Code requires **Python 3.12+**.
 
 ```bash
 pip install god-code
 ```
 
-With MCP support (for Claude Code / Codex integration):
+With MCP support:
 
 ```bash
-pip install god-code[mcp]
+pip install "god-code[mcp]"
 ```
 
-Requires Python 3.9+.
-
-### Claude Code Skill (one-click setup)
-
-If you use Claude Code, install the god-code skill for automated setup:
+For local development:
 
 ```bash
-# Copy the skill to your Claude Code skills directory
+git clone https://github.com/888wing/god-code.git
+cd god-code
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev,mcp]"
+```
+
+If you want validation, playtest, or screenshot flows to work, you also need a usable **Godot executable** on your machine.
+
+## First Run
+
+The easiest way to start is:
+
+```bash
+god-code chat --project ./my-game
+```
+
+If you are in an interactive terminal and have not configured credentials yet, God Code will launch a **setup wizard** and ask for:
+
+1. provider
+2. API key or OAuth path
+3. optional base URL / model overrides
+
+You can also run setup explicitly:
+
+```bash
+god-code setup
+```
+
+Once inside chat, use:
+
+- `/menu` for the interactive command menu
+- `/provider` to switch provider
+- `/model` to switch model
+- `/intent` to inspect or confirm gameplay direction
+- `/settings` to edit all config fields
+- `/resume` to restore a saved session
+- `"""` to start multiline input
+
+If the project sends mixed gameplay signals, God Code may pause to ask 1 to 3 short **intent confirmation** questions before making architecture-level combat or enemy changes.
+
+## Common Workflows
+
+### 1. Ask for a one-shot change
+
+```bash
+god-code ask "Add a health bar to the player HUD" --project ./my-game
+```
+
+### 2. Work interactively inside a project
+
+```bash
+god-code chat --project ./my-game
+```
+
+Typical chat flow:
+
+1. inspect project context
+2. confirm gameplay intent if needed
+3. switch mode if needed
+4. make a request
+5. let God Code edit and validate
+6. review results or resume later
+
+### 3. From an empty project to the first verified change
+
+If you want a concrete walkthrough instead of isolated commands, start here:
+
+- [From Empty Project To First Verified Change](docs/empty-project-to-first-verified-change.md)
+
+This example covers:
+
+1. creating the smallest valid Godot project root
+2. launching `god-code chat`
+3. handling first-run BYOK setup
+4. making a safe first scene/script change
+5. checking what counts as a verified result
+
+## Gameplay Intent And Genre Skills
+
+God Code does not assume one universal enemy AI model for every game. It now tries to infer a **gameplay profile** from:
+
+- `project.godot`
+- input actions
+- scene and script naming
+- design memory
+- the current request
+
+If confidence is low, or if the project mixes signals such as shooter and tower-defense mechanics, use:
+
+```text
+/intent
+/intent confirm
+/intent edit
+/intent clear
+```
+
+The confirmed profile is stored in project design memory and reused by planning, implementation, review, and playtest flows.
+
+### Current genre-aware internal skills
+
+- `bullet_hell`
+- `topdown_shooter`
+- `platformer_enemy`
+- `tower_defense`
+- `stealth_guard`
+- `collision`
+- `physics`
+
+### 4. Plan before editing
+
+Inside chat:
+
+```text
+/mode plan
+```
+
+Then ask for the change. In `plan` mode, God Code should inspect and propose an implementation strategy without mutating files.
+
+### 5. Review or debug an existing change
+
+```text
+/mode review
+```
+
+or
+
+```text
+/mode fix
+```
+
+Use `review` for bug/risk-finding and `fix` for reproduce-repair-validate loops.
+
+## BYOK, Providers, and Model Switching
+
+God Code supports both **interactive BYOK** and config/env-based setup.
+
+### Interactive
+
+Inside chat:
+
+- `/menu -> Switch provider`
+- `/menu -> Switch model`
+- `/menu -> Edit setting -> api_key`
+- `/menu -> Edit setting -> oauth_token`
+
+Sensitive fields use hidden input. If you switch to a provider that needs a different key, God Code will prompt for it.
+
+### Environment variables
+
+```bash
+export GODOT_AGENT_API_KEY="sk-..."
+export GODOT_AGENT_MODEL="gpt-5.4"
+export GODOT_AGENT_BASE_URL="https://api.openai.com/v1"
+```
+
+### Config file
+
+Default path:
+
+```text
+~/.config/god-code/config.json
+```
+
+Example:
+
+```json
+{
+  "provider": "openai",
+  "api_key": "sk-...",
+  "model": "gpt-5.4",
+  "godot_path": "godot",
+  "mode": "apply",
+  "streaming": true,
+  "autosave_session": true
+}
+```
+
+### Built-in provider presets
+
+| Provider | Default Model | Notes |
+|----------|---------------|-------|
+| OpenAI | `gpt-5.4` | Supports OAuth and computer-use settings |
+| Anthropic | `claude-sonnet-4.6` | Direct Anthropic preset |
+| OpenRouter | `openai/gpt-5.4` | Aggregated routing |
+| Gemini | `gemini-3.1-pro` | OpenAI-compatible Google endpoint |
+| xAI | `grok-4` | xAI API |
+| GLM / Z.AI | `glm-5` | Z.AI platform |
+| MiniMax | `MiniMax-M2.5` | MiniMax API |
+| Custom | none | For local/self-hosted/other compatible endpoints |
+
+For a `custom` provider, API keys are optional at the tool level because some local/self-hosted endpoints do not require them.
+
+## CLI vs MCP
+
+### Use the CLI when you want:
+
+- a full LLM-driven agent
+- interactive chat
+- provider/model switching
+- sessions and `/resume`
+- quality gates, reviewer flow, and chat UX
+
+### Use MCP when you want:
+
+- local Godot-native tools exposed to another agent host
+- no built-in chat loop
+- no additional LLM layer inside God Code itself
+
+Start the MCP server with:
+
+```bash
+god-code mcp --project /path/to/project
+```
+
+List available MCP tools with:
+
+```bash
+god-code tools
+```
+
+### Claude Code skill setup
+
+If you use Claude Code, install the bundled setup skill:
+
+```bash
 mkdir -p ~/.claude/skills/god-code-setup
 curl -sL https://raw.githubusercontent.com/888wing/god-code/main/skills/god-code-setup/SKILL.md \
   -o ~/.claude/skills/god-code-setup/SKILL.md
 ```
 
-Then in Claude Code, just say: **"install god-code and configure MCP"** — it will handle everything automatically.
+Then ask Claude Code to install and configure God Code for you.
 
-### From Source
+## How a Change Flows Through the System
 
-```bash
-git clone https://github.com/888wing/god-code.git
-cd god-code
-pip install -e ".[dev,mcp]"
-```
+At a high level, an `apply` or `fix` request looks like this:
 
-## Quick Start
+1. build prompt from project context, design memory, mode, and selected skills
+2. inspect project files and scene/script structure
+3. execute local tools through the security/tool pipeline
+4. run validation and quality gates after mutations
+5. run reviewer / gameplay review / playtest-style checks when applicable
+6. return a summary that distinguishes verified outcomes from assumptions
 
-### 1. Configure API key (BYOK — Bring Your Own Key)
-
-```bash
-# Option A: Environment variable
-export GODOT_AGENT_API_KEY="sk-proj-..."
-
-# Option B: Config file
-mkdir -p ~/.config/god-code
-cat > ~/.config/god-code/config.json << 'EOF'
-{
-  "api_key": "sk-proj-your-key-here",
-  "model": "gpt-5.4",
-  "godot_path": "/path/to/godot"
-}
-EOF
-```
-
-### 2. Use
-
-```bash
-# Single prompt
-god-code ask "Add a health bar to the player scene" --project ./my-game
-
-# Script-friendly plain output
-god-code ask "Summarize this project" --project ./my-game --plain
-
-# Interactive chat
-god-code chat --project ./my-game
-
-# Project info
-god-code info --project ./my-game
-
-# With reference image
-god-code ask "Make the UI match this design" --project ./my-game -i reference.png
-```
-
-## API Configuration
-
-### Supported Providers (BYOK)
-
-God Code uses the OpenAI-compatible chat completions API. Any provider that supports this format works:
-
-| Provider | Base URL | Model Example |
-|----------|----------|---------------|
-| **OpenAI** | `https://api.openai.com/v1` (default) | `gpt-4o`, `gpt-4o-mini` |
-| **OpenRouter** | `https://openrouter.ai/api/v1` | `openai/gpt-4o`, `anthropic/claude-sonnet-4-6` |
-| **Anthropic** | Via OpenRouter or compatible proxy | `anthropic/claude-sonnet-4-6` |
-| **Local models** | `http://localhost:11434/v1` (Ollama) | `llama3`, `codestral` |
-
-```bash
-# OpenRouter example (access all models with one key)
-export GODOT_AGENT_API_KEY="sk-or-..."
-export GODOT_AGENT_BASE_URL="https://openrouter.ai/api/v1"
-export GODOT_AGENT_MODEL="anthropic/claude-sonnet-4-6"
-```
-
-### OAuth (Experimental)
-
-God Code can use Codex CLI's refresh token for OAuth-based access:
-
-```bash
-# First login via Codex CLI
-codex login
-
-# Then god-code can use the cached credentials
-god-code login    # Refreshes token from ~/.codex/auth.json
-god-code status   # Shows current auth status
-god-code logout   # Removes stored credentials
-```
-
-> **Note**: OAuth via Codex subscription tokens has limited API scope. For full API access (tool calling, vision), use an API key.
-
-### Config File Reference
-
-`~/.config/god-code/config.json`:
-
-```json
-{
-  "api_key": "",
-  "base_url": "https://api.openai.com/v1",
-  "model": "gpt-5.4",
-  "oauth_token": null,
-  "mode": "apply",
-  "max_turns": 20,
-  "max_tokens": 4096,
-  "temperature": 0.0,
-  "auto_validate": true,
-  "auto_commit": false,
-  "streaming": true,
-  "autosave_session": true,
-  "screenshot_max_iterations": 5,
-  "godot_path": "godot",
-  "session_dir": ".agent_sessions"
-}
-```
-
-All fields can be overridden with `GODOT_AGENT_` prefixed environment variables.
+This is the main difference between God Code and a plain “LLM that edits files”.
 
 ## Chat Commands
 
-Interactive chat supports:
+Core commands inside chat:
 
-- `/mode [name]` — interactive mode menu (apply/plan/explain/review/fix)
-- `/provider [name]` — interactive provider switcher with menu
-- `/model [name]` — interactive model selection menu
-- `/effort [level]` — reasoning effort (auto/minimal/low/medium/high/xhigh)
-- `/settings` — interactive settings editor with menus for each option
-- `/set <key> <value>` — quick inline setting change
-- `/sessions` and `/resume [session-id]`
-- `/new` to start a fresh session
-- `/workspace` to re-render the session snapshot
-- `/set <key> <value>` for live configuration changes
+- `/menu` interactive command palette
+- `/mode [apply|plan|explain|review|fix]`
+- `/provider [name]`
+- `/model [name]`
+- `/effort [auto|minimal|low|medium|high|xhigh]`
+- `/skills [list|on <name>|off <name>|auto|clear]`
+- `/settings`
+- `/set <key> <value>`
+- `/status`
+- `/workspace`
+- `/sessions`
+- `/resume [session-id|latest]`
+- `/new`
+- `/save`
+- `/cd <path>`
+- `/help`
+- `/quit`
 
-## System Prompt & Output Quality
+Top-level CLI commands:
 
-God Code's system prompt is dynamically assembled from:
+- `god-code`
+- `god-code chat`
+- `god-code ask`
+- `god-code setup`
+- `god-code status`
+- `god-code info`
+- `god-code login`
+- `god-code logout`
+- `god-code mcp`
+- `god-code tools`
 
-1. **Core identity** — Godot expert agent with composition-over-inheritance philosophy
-2. **Godot Playbook** — 17 knowledge sections auto-selected by task keywords (collision, UI, animation, etc.)
-3. **Build discipline** — mandatory incremental build-and-verify workflow
-4. **Project context** — parsed from project.godot (name, autoloads, resolution, renderer)
-5. **Tool catalog** — available tools with usage guidance
+## Safety and Limits
 
-### Prompt Optimization
+- **Project-root containment**
+  file tools are restricted to the active project root
+- **Mode-aware tool access**
+  `plan` and `review` are intended for inspection, not broad mutation
+- **Shell safety**
+  shell commands go through a safety policy instead of raw unrestricted execution
+- **Interactive setup only in interactive terminals**
+  non-interactive CLI usage will not launch setup prompts for you
+- **Runtime features depend on local environment**
+  validation, runtime harness, screenshots, and playtests need a working Godot setup
+- **Custom providers must still be compatible with the flows you use**
+  especially tool calling, structured outputs, and multimodal features
 
-- Knowledge sections are scored by keyword relevance — only top 4 are injected per request (~2K tokens instead of ~15K)
-- Build discipline rules prevent "write everything then test" anti-patterns
-- Common Mistakes section is always included as a safety net
-- Project context gives the LLM awareness of autoloads, resolution, and file structure
+## Architecture Overview
 
-### Output Quality Tools
+```text
+godot_agent/
+├── cli.py                    # chat/ask/setup/status/mcp entrypoints
+├── entrypoint.py             # Python-version guard before importing cli
+├── agents/                   # planner / explorer / reviewer / playtest analyst configs
+├── runtime/
+│   ├── engine.py             # main agent loop and orchestration
+│   ├── quality_gate.py       # post-change validation aggregation
+│   ├── reviewer.py           # technical review pass
+│   ├── gameplay_reviewer.py  # gameplay-oriented review pass
+│   ├── playtest_harness.py   # scenario and runtime-based verification
+│   ├── runtime_bridge.py     # runtime snapshot bridge
+│   ├── design_memory.py      # gameplay/design memory
+│   ├── config.py             # config loading and defaults
+│   └── session.py            # autosave and resume
+├── security/                 # tool pipeline, policies, hooks, protected paths
+├── tools/                    # file, scene, script, analysis, runtime, asset, web tools
+├── godot/                    # Godot parsers, validators, analyzers
+├── prompts/                  # prompt assembly, skills, playbook, selection
+└── mcp_server.py             # MCP tool server
+```
 
-After the LLM generates code, God Code provides:
+## Testing
 
-| Tool | What it checks |
-|------|---------------|
-| **tscn_validator** | .tscn format rules (sub_resource ordering, load_steps count) |
-| **gdscript_linter** | Naming conventions, code ordering, type annotations, anti-patterns |
-| **collision_planner** | Standard 8-layer collision scheme |
-| **consistency_checker** | Cross-file collision/signal/resource path consistency |
-| **pattern_advisor** | Object pool, component pattern, state machine suggestions |
-| **dependency_graph** | Project-wide file dependency mapping |
+The repository includes unit, integration, TUI, CLI, runtime, and end-to-end style tests.
 
-## Security
-
-God Code executes tools on your local machine. The LLM decides which tools to call.
-
-**Path containment**: File operations (read/write/edit) are restricted to the project root directory. The agent cannot access files outside your project.
-
-**Shell commands**: `run_shell` executes commands within the project directory. Review commands in the chat output before approving.
-
-**API keys**: Stored in `~/.config/god-code/config.json` with `600` permissions. Never committed to git.
-
-## MCP Server (for Claude Code / Codex / AI Agents)
-
-God Code can run as an MCP (Model Context Protocol) server, exposing 20 Godot tools directly to AI agents. **No LLM middleman, zero token cost** — tools run locally.
-
-### Install
+Run the full suite with the project virtualenv:
 
 ```bash
-pip install god-code[mcp]
+.venv/bin/pytest -q
 ```
 
-### Configure in Claude Code
-
-Add to `~/.claude.json` or Claude Desktop config:
-
-```json
-{
-  "mcpServers": {
-    "god-code": {
-      "command": "god-code",
-      "args": ["mcp", "--project", "/path/to/your/godot/project"]
-    }
-  }
-}
-```
-
-### Available MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `validate_project` | Run Godot headless validation, return errors/warnings |
-| `validate_tscn` | Check .tscn format, optionally auto-fix ordering |
-| `lint_script` | GDScript style, naming, type annotation checks |
-| `check_consistency` | Cross-file collision/signal/resource consistency |
-| `plan_collision` | Generate standard 8-layer collision config |
-| `analyze_dependencies` | Build project-wide dependency graph |
-| `suggest_patterns` | Object pool, component, state machine suggestions |
-| `parse_scene` | Parse .tscn into structured node tree |
-| `project_info` | Read project.godot metadata |
-| `godot_knowledge` | Query Godot 4.4 Playbook (17 knowledge sections) |
-| `generate_sprite` | AI pixel art generation + post-processing |
-| `validate_resources` | Check all res:// paths exist |
-
-### How it works
-
-```
-Claude Code / Codex
-    ↓ (MCP protocol over stdio)
-god-code mcp process (local)
-    ↓ (direct function calls)
-Godot analysis tools (no LLM needed)
-```
-
-The AI agent gets Godot-native intelligence without you paying for an extra LLM layer.
-
-## Architecture
-
-```
-godot_agent/
-├── cli.py              # Click CLI (ask, chat, info, login, logout, status)
-├── runtime/
-│   ├── engine.py       # Conversation loop with tool calling
-│   ├── config.py       # Config loading (file + env vars)
-│   ├── session.py      # Session persistence
-│   ├── oauth.py        # Codex OAuth token refresh
-│   ├── error_loop.py   # Godot error detection and fix suggestions
-│   └── context_manager.py  # Context window management
-├── llm/
-│   ├── client.py       # OpenAI-compatible API client
-│   ├── streaming.py    # SSE streaming
-│   └── vision.py       # Image encoding for multimodal
-├── tools/              # 10 function-calling tools
-├── godot/              # Godot-specific analysis
-│   ├── project.py      # project.godot parser
-│   ├── scene_parser.py # .tscn reader
-│   ├── scene_writer.py # .tscn modifier
-│   ├── tscn_validator.py
-│   ├── gdscript_linter.py
-│   ├── collision_planner.py
-│   ├── consistency_checker.py
-│   ├── dependency_graph.py
-│   ├── pattern_advisor.py
-│   └── resource_validator.py
-└── prompts/            # System prompt construction
-    ├── system.py
-    ├── godot_playbook.py   # 17 knowledge sections
-    ├── knowledge_selector.py
-    └── build_discipline.py
-```
+Do not rely on a random system `pytest` if it points to an older Python runtime than the project supports.
 
 ## License
 
-GPL-3.0 — see [LICENSE](LICENSE)
+GPL-3.0-or-later. See [LICENSE](LICENSE).

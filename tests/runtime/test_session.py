@@ -23,12 +23,22 @@ class TestSessions:
             project_name="Demo",
             model="gpt-5.4",
             mode="review",
+            skill_mode="hybrid",
+            enabled_skills=["collision"],
+            disabled_skills=["physics"],
+            active_skills=["collision"],
+            gameplay_intent={"genre": "bullet_hell", "enemy_model": "scripted_patterns", "confirmed": True},
         )
 
         record = load_session(str(tmp_path), "abc123")
         assert record is not None
         assert record.project_name == "Demo"
         assert record.mode == "review"
+        assert record.skill_mode == "hybrid"
+        assert record.enabled_skills == ["collision"]
+        assert record.disabled_skills == ["physics"]
+        assert record.active_skills == ["collision"]
+        assert record.gameplay_intent["genre"] == "bullet_hell"
         assert record.message_count == len(messages)
         assert record.messages[2].tool_calls is not None
         assert record.messages[2].tool_calls[0].name == "read_file"
