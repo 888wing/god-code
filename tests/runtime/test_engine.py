@@ -211,6 +211,23 @@ class TestConversationEngine:
         mock_client.chat.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_route_metadata_passed_to_chat(self):
+        """Engine builds route_metadata and passes it to client.chat()."""
+        mock_client = AsyncMock(spec=LLMClient)
+        mock_client.chat = AsyncMock(return_value=_resp(Message.assistant(content="Done")))
+        registry = ToolRegistry()
+        engine = ConversationEngine(client=mock_client, registry=registry, system_prompt="test", mode="apply")
+        await engine.submit("Hello")
+        call_kwargs = mock_client.chat.call_args
+        # route_metadata should be passed as keyword arg
+        metadata = call_kwargs.kwargs.get("route_metadata")
+        assert metadata is not None
+        assert metadata["mode"] == "apply"
+        assert metadata["round_number"] == 1
+        assert metadata["agent_role"] == "worker"
+        assert metadata["changeset_size"] == 0
+
+    @pytest.mark.asyncio
     async def test_manual_skill_override_narrows_tools_without_keyword_match(self, tmp_path):
         (tmp_path / "project.godot").write_text('config_version=5\n\n[application]\nconfig/name="SkillOverride"\n')
         mock_client = AsyncMock(spec=LLMClient)

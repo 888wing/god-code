@@ -501,7 +501,20 @@ class ConversationEngine:
             self.changeset.mark_modified(path)
             modified_files.add(str(Path(path).resolve()))
 
-    async def _call_model(self, tools: list[dict] | None, use_streaming: bool, turn: TurnStats) -> tuple[Message, bool]:
+    def _build_route_metadata(self, round_index: int = 0) -> dict:
+        """Build routing metadata for backend orchestration."""
+        skill = self.active_skills[0] if self.active_skills else None
+        return {
+            "session_id": getattr(self, "session_id", ""),
+            "agent_role": getattr(self, "_current_agent_role", "worker"),
+            "skill": skill,
+            "mode": self.mode,
+            "round_number": round_index + 1,
+            "changeset_size": len(self.changeset.modified_files),
+            "estimated_tokens": 0,
+        }
+
+    async def _call_model(self, tools: list[dict] | None, use_streaming: bool, turn: TurnStats, round_index: int = 0) -> tuple[Message, bool]:
         stream_active = use_streaming and self.on_stream_chunk is not None
         if stream_active:
             if self.on_stream_start:
@@ -515,7 +528,8 @@ class ConversationEngine:
                 on_chunk=self.on_stream_chunk,
             )
         else:
-            chat_resp = await self.client.chat(self.messages, tools)
+            route_metadata = self._build_route_metadata(round_index)
+            chat_resp = await self.client.chat(self.messages, tools, route_metadata=route_metadata)
 
         turn.usage = turn.usage + chat_resp.usage
         turn.api_calls += 1
@@ -643,6 +657,7 @@ class ConversationEngine:
                 godot_path=self.godot_path,
                 quality_report=self.last_quality_report,
                 design_memory=self.design_memory,
+                intent_profile=self.intent_profile,
                 impact_report=self.last_impact_report,
                 runtime_snapshot=get_runtime_snapshot(),
                 playtest_report=self.last_playtest_report,
@@ -680,6 +695,7 @@ class ConversationEngine:
                 impact_report=self.last_impact_report,
                 runtime_snapshot=get_runtime_snapshot(),
                 intent_profile=self.intent_profile,
+                design_memory=self.design_memory,
             )
         self.last_playtest_report = report or PlaytestReport()
         self._emit_event("playtest_finished", f"Playtest verdict: {self.last_playtest_report.verdict}", verdict=self.last_playtest_report.verdict)
@@ -714,7 +730,7 @@ class ConversationEngine:
 
             if state.phase is LoopPhase.CALL_MODEL:
                 tools = self._current_openai_tools()
-                response, stream_active = await self._call_model(tools, use_streaming, turn)
+                response, stream_active = await self._call_model(tools, use_streaming, turn, round_index=state.round_index)
                 state.pending_response = response
 
                 if not response.tool_calls:
