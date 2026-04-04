@@ -149,6 +149,22 @@ class TestLLMClient:
         usage = TokenUsage(prompt_tokens=1_000_000, completion_tokens=1_000_000)
         assert usage.cost_estimate("openai/gpt-5.4") == 17.5
 
+    def test_use_backend_false_by_default(self):
+        config = LLMConfig(api_key="sk-test", base_url="https://api.openai.com/v1", provider="openai", model="gpt-5.4")
+        client = LLMClient(config)
+        assert client._use_backend is False
+
+    def test_use_backend_true_when_url_set(self):
+        config = LLMConfig(api_key="sk-test", base_url="https://api.openai.com/v1", provider="openai", model="gpt-5.4", backend_url="https://api.god-code.dev")
+        client = LLMClient(config)
+        assert client._use_backend is True
+        assert client._backend_url == "https://api.god-code.dev"
+
+    def test_backend_url_trailing_slash_stripped(self):
+        config = LLMConfig(api_key="sk-test", backend_url="https://api.god-code.dev/")
+        client = LLMClient(config)
+        assert client._backend_url == "https://api.god-code.dev"
+
     def test_build_computer_use_request(self):
         client = LLMClient(
             LLMConfig(

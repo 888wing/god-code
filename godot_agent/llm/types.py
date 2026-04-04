@@ -134,6 +134,8 @@ class LLMConfig:
     computer_use_environment: str = "browser"
     computer_use_display_width: int = 1024
     computer_use_display_height: int = 768
+    backend_url: str = ""
+    backend_provider_keys: dict[str, str] = field(default_factory=dict)
 
 
 def _pricing_for_model(model: str) -> tuple[float, float]:
