@@ -133,6 +133,7 @@ Typical chat flow:
 If you want a concrete walkthrough instead of isolated commands, start here:
 
 - [From Empty Project To First Verified Change](docs/empty-project-to-first-verified-change.md)
+- [Docs Site](https://888wing.github.io/god-code/)
 
 This example covers:
 
@@ -141,6 +142,19 @@ This example covers:
 3. handling first-run BYOK setup
 4. making a safe first scene/script change
 5. checking what counts as a verified result
+
+## Documentation
+
+- Docs site: [888wing.github.io/god-code](https://888wing.github.io/god-code/)
+- Docs source: [`docs/`](docs/)
+- Local preview:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[docs]"
+mkdocs serve
+```
 
 ## Gameplay Intent And Genre Skills
 
@@ -172,6 +186,32 @@ The confirmed profile is stored in project design memory and reused by planning,
 - `stealth_guard`
 - `collision`
 - `physics`
+
+### Current support boundary
+
+For open-source users, it is important to treat the genre system as **tiered support**, not universal gameplay generation.
+
+First-class genre support currently targets:
+
+- `bullet_hell`
+- `topdown_shooter`
+- `platformer_enemy`
+- `tower_defense`
+
+For these genres, God Code is intended to infer a stable gameplay profile, route to matching internal skills, and steer enemy/combat work toward the correct architecture.
+
+Everything else currently falls back to more general Godot-aware reasoning. That means God Code may still help, but it does **not** yet guarantee a complete genre-specific enemy-system scaffold for:
+
+- stealth-heavy guard AI
+- 3D action combat
+- RTS / squad tactics
+- turn-based tactics or card battlers
+- multiplayer / netcode-driven combat
+- economy or simulation-heavy games
+
+If you are working on enemies, bosses, combat loops, waves, or gameplay architecture, use `/intent` early in chat to confirm direction before asking for large system changes.
+
+God Code does not aim to generate one universal enemy AI for every game. It first tries to identify the gameplay profile, then applies the most appropriate architecture for that genre.
 
 ### 4. Plan before editing
 

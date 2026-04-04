@@ -157,7 +157,7 @@ Do not interrupt the user for:
 
 ## Workspace Changes
 
-Add an `Intent` panel to the current workspace layout in [display.py](/Users/chuisiufai/Projects/god-code/godot_agent/tui/display.py):
+Add an `Intent` panel to the current workspace layout in `godot_agent/tui/display.py`:
 
 - `Genre`
 - `Combat`
@@ -244,7 +244,7 @@ Bad:
 
 Create a new module:
 
-- `/Users/chuisiufai/Projects/god-code/godot_agent/runtime/intent_resolver.py`
+- `godot_agent/runtime/intent_resolver.py`
 
 Responsibilities:
 
@@ -293,7 +293,7 @@ class GameplayIntentProfile:
 
 ## Design Memory Expansion
 
-Extend [design_memory.py](/Users/chuisiufai/Projects/god-code/godot_agent/runtime/design_memory.py) with structured intent fields:
+Extend `godot_agent/runtime/design_memory.py` with structured intent fields:
 
 - `genre_profile`
 - `camera_profile`
@@ -395,7 +395,7 @@ God Code should generate the right enemy architecture for the current gameplay p
 
 ## Agent Behavior Changes
 
-The current built-in agents in [configs.py](/Users/chuisiufai/Projects/god-code/godot_agent/agents/configs.py) should all consume the same gameplay profile.
+The current built-in agents in `godot_agent/agents/configs.py` should all consume the same gameplay profile.
 
 ### Planner
 
@@ -459,12 +459,12 @@ Upgrade playtest selection to be profile-aware.
 
 Add:
 
-- `/Users/chuisiufai/Projects/god-code/godot_agent/runtime/intent_resolver.py`
+- `godot_agent/runtime/intent_resolver.py`
 
 Update:
 
-- `/Users/chuisiufai/Projects/god-code/godot_agent/runtime/design_memory.py`
-- `/Users/chuisiufai/Projects/god-code/godot_agent/tools/memory_tool.py`
+- `godot_agent/runtime/design_memory.py`
+- `godot_agent/tools/memory_tool.py`
 
 Acceptance:
 
@@ -476,10 +476,10 @@ Acceptance:
 
 Update:
 
-- `/Users/chuisiufai/Projects/god-code/godot_agent/tui/display.py`
-- `/Users/chuisiufai/Projects/god-code/godot_agent/tui/input_handler.py`
-- `/Users/chuisiufai/Projects/god-code/godot_agent/cli.py`
-- `/Users/chuisiufai/Projects/god-code/godot_agent/runtime/events.py`
+- `godot_agent/tui/display.py`
+- `godot_agent/tui/input_handler.py`
+- `godot_agent/cli.py`
+- `godot_agent/runtime/events.py`
 
 Acceptance:
 
@@ -491,9 +491,9 @@ Acceptance:
 
 Update:
 
-- `/Users/chuisiufai/Projects/god-code/godot_agent/prompts/assembler.py`
-- `/Users/chuisiufai/Projects/god-code/godot_agent/prompts/skill_library.py`
-- `/Users/chuisiufai/Projects/god-code/godot_agent/prompts/skill_selector.py`
+- `godot_agent/prompts/assembler.py`
+- `godot_agent/prompts/skill_library.py`
+- `godot_agent/prompts/skill_selector.py`
 
 Add:
 
@@ -508,8 +508,8 @@ Acceptance:
 
 Update:
 
-- `/Users/chuisiufai/Projects/god-code/godot_agent/godot/pattern_advisor.py`
-- `/Users/chuisiufai/Projects/god-code/godot_agent/runtime/engine.py`
+- `godot_agent/godot/pattern_advisor.py`
+- `godot_agent/runtime/engine.py`
 
 Add:
 
@@ -528,9 +528,9 @@ Acceptance:
 
 Update:
 
-- `/Users/chuisiufai/Projects/god-code/godot_agent/runtime/playtest_harness.py`
-- `/Users/chuisiufai/Projects/god-code/godot_agent/testing/scenario_runner.py`
-- `/Users/chuisiufai/Projects/god-code/godot_agent/runtime/scenario_specs/*`
+- `godot_agent/runtime/playtest_harness.py`
+- `godot_agent/testing/scenario_runner.py`
+- `godot_agent/runtime/scenario_specs/*`
 
 Acceptance:
 
@@ -541,8 +541,8 @@ Acceptance:
 
 Update:
 
-- `/Users/chuisiufai/Projects/god-code/README.md`
-- `/Users/chuisiufai/Projects/god-code/CHANGELOG.md`
+- `README.md`
+- `CHANGELOG.md`
 
 Add:
 
@@ -568,12 +568,12 @@ Add tests for:
 
 Suggested files:
 
-- `/Users/chuisiufai/Projects/god-code/tests/runtime/test_intent_resolver.py`
-- `/Users/chuisiufai/Projects/god-code/tests/runtime/test_design_memory.py`
-- `/Users/chuisiufai/Projects/god-code/tests/tui/test_input_handler.py`
-- `/Users/chuisiufai/Projects/god-code/tests/tui/test_display.py`
-- `/Users/chuisiufai/Projects/god-code/tests/prompts/test_skill_selector.py`
-- `/Users/chuisiufai/Projects/god-code/tests/runtime/test_playtest_harness.py`
+- `tests/runtime/test_intent_resolver.py`
+- `tests/runtime/test_design_memory.py`
+- `tests/tui/test_input_handler.py`
+- `tests/tui/test_display.py`
+- `tests/prompts/test_skill_selector.py`
+- `tests/runtime/test_playtest_harness.py`
 
 ## Initial Implementation Recommendation
 
