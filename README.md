@@ -1,5 +1,9 @@
 # God Code
 
+[![GitHub stars](https://img.shields.io/github/stars/888wing/god-code?style=social)](https://github.com/888wing/god-code/stargazers)
+[![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-1f6feb)](https://888wing.github.io/god-code/)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Support-FFDD00?logo=buymeacoffee&logoColor=000000)](https://buymeacoffee.com/nano122090n)
+
 God Code is an AI coding agent for **Godot 4.x game development**. It understands GDScript, `.tscn` scene files, resources, collision layers, and common Godot architecture patterns, then wraps model output in a local tool pipeline with validation, review, and playtest-oriented checks.
 
 The project is aimed at developers building **original Godot games**, not just template projects. The goal is to help you turn design intent into working gameplay without losing control of your codebase.
@@ -435,6 +439,15 @@ Run the full suite with the project virtualenv:
 ```
 
 Do not rely on a random system `pytest` if it points to an older Python runtime than the project supports.
+
+## Support
+
+If God Code is useful in your Godot workflow:
+
+- Star the repo: [github.com/888wing/god-code/stargazers](https://github.com/888wing/god-code/stargazers)
+- Share the docs: [888wing.github.io/god-code](https://888wing.github.io/god-code/)
+- Support development: [buymeacoffee.com/nano122090n](https://buymeacoffee.com/nano122090n)
+- Use the repo `Sponsor` button for the same support links
 
 ## License
 
