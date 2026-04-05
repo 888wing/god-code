@@ -102,20 +102,37 @@ def _crop_region(image: Image.Image, region: tuple[int, int, int, int] | None) -
 
 
 def _difference_metrics(diff: Image.Image, tolerance: int) -> tuple[int, int]:
+    # Compute max channel delta across the entire diff image.
+    # extrema() returns per-band (min, max) tuples.
+    extrema = diff.getextrema()
+    if isinstance(extrema[0], int):
+        # Single-band image
+        max_channel_delta = extrema[1]
+    else:
+        max_channel_delta = max(band_max for _, band_max in extrema)
+
+    # Apply tolerance: zero out channels within tolerance, then count
+    # non-black pixels via getbbox on a per-pixel max projection.
+    if tolerance > 0:
+        tolerated = diff.point(lambda p: 0 if p <= tolerance else p)
+    else:
+        tolerated = diff
+
+    # Convert to grayscale by taking max across channels per pixel.
+    # Split into individual bands, then use ImageChops.lighter to
+    # find the per-pixel maximum across all channels.
+    bands = tolerated.split()
+    max_band = bands[0]
+    for band in bands[1:]:
+        max_band = ImageChops.lighter(max_band, band)
+
+    # Count non-zero pixels.  getcolors() returns (count, value) tuples.
+    # A pixel with max_band > 0 means it differs beyond tolerance.
     pixel_diff_count = 0
-    max_channel_delta = 0
-    pixels = diff.load()
-    for y in range(diff.height):
-        for x in range(diff.width):
-            pixel = pixels[x, y]
-            if isinstance(pixel, int):
-                channels = (pixel,)
-            else:
-                channels = tuple(int(channel) for channel in pixel)
-            local_max = max(channels)
-            max_channel_delta = max(max_channel_delta, local_max)
-            if local_max > tolerance:
-                pixel_diff_count += 1
+    for count, val in max_band.getcolors(maxcolors=max_band.width * max_band.height):
+        if val > 0:
+            pixel_diff_count += count
+
     return pixel_diff_count, max_channel_delta
 
 
