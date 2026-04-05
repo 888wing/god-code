@@ -20,7 +20,7 @@ from godot_agent.runtime.gameplay_reviewer import review_gameplay_constraints
 from godot_agent.runtime.playtest_harness import PlaytestReport, run_playtest_harness
 from godot_agent.runtime.quality_gate import QualityGateReport
 from godot_agent.runtime.runtime_bridge import RuntimeSnapshot
-from godot_agent.runtime.validation_checks import ValidationSuite
+from godot_agent.runtime.validation_checks import CheckResult, ValidationSuite
 
 
 @dataclass
@@ -67,6 +67,21 @@ def _append(report: ReviewReport, description: str, command: str, observed_outpu
     )
 
 
+# Map ValidationSuite status values to reviewer status values
+_REVIEW_STATUS = {"pass": "PASS", "warning": "PARTIAL", "error": "FAIL"}
+
+
+def _use_cached(report: ReviewReport, cached: CheckResult, description: str, command: str) -> None:
+    """Convert a cached CheckResult into a ReviewCheck and append it."""
+    _append(
+        report,
+        description,
+        command,
+        cached.summary or cached.details or "Cached result",
+        _REVIEW_STATUS.get(cached.status, "PASS"),
+    )
+
+
 async def review_changes(
     *,
     project_root: Path,
@@ -93,6 +108,12 @@ async def review_changes(
         )
         return report
 
+    # Create suite internally when not provided (backward compat).
+    # Don't run_all() here — suite.get() returns None for un-run suites,
+    # so all checks fall through to the existing logic.
+    if validation_suite is None:
+        validation_suite = ValidationSuite(project_root=project_root, changed_files=changed_files)
+
     if quality_report is not None:
         status = "FAIL" if quality_report.verdict == "fail" else "PARTIAL" if quality_report.verdict == "partial" else "PASS"
         _append(
@@ -107,113 +128,154 @@ async def review_changes(
         _relative_to(project_root, Path(path)): Path(path).resolve()
         for path in changed_files
     }
-    if impact_report is None:
-        impact_report = analyze_change_impact(project_root, changed_files)
-    _append(
-        report,
-        "Analyze affected systems before final verdict",
-        f"analyze_change_impact {project_root}",
-        format_impact_report(impact_report),
-        "PASS",
-    )
+
+    cached = validation_suite.get("change-impact")
+    if cached:
+        _use_cached(report, cached, "Analyze affected systems before final verdict", f"analyze_change_impact {project_root}")
+    else:
+        if impact_report is None:
+            impact_report = analyze_change_impact(project_root, changed_files)
+        _append(
+            report,
+            "Analyze affected systems before final verdict",
+            f"analyze_change_impact {project_root}",
+            format_impact_report(impact_report),
+            "PASS",
+        )
 
     for rel_path, abs_path in sorted(rel_changed.items()):
         if not abs_path.exists():
-            _append(
-                report,
-                f"Verify changed file still exists for {rel_path}",
-                f"stat {abs_path}",
-                "Changed file is missing after the write step.",
-                "FAIL",
-            )
+            cached = validation_suite.get("file-exists")
+            if cached:
+                _use_cached(report, cached, f"Verify changed file still exists for {rel_path}", f"stat {abs_path}")
+            else:
+                _append(
+                    report,
+                    f"Verify changed file still exists for {rel_path}",
+                    f"stat {abs_path}",
+                    "Changed file is missing after the write step.",
+                    "FAIL",
+                )
             continue
 
         if abs_path.suffix == ".gd":
-            issues = lint_gdscript(abs_path.read_text(encoding="utf-8", errors="replace"), rel_path)
-            status = "FAIL" if any(issue.severity == "error" for issue in issues) else "PARTIAL" if issues else "PASS"
-            observed = format_lint_report(issues, rel_path) if issues else "No lint issues found."
-            _append(
-                report,
-                f"Lint changed script {rel_path}",
-                f"lint_gdscript {abs_path}",
-                observed,
-                status,
-            )
+            cached = validation_suite.get("gdscript-lint")
+            if cached:
+                _use_cached(report, cached, f"Lint changed script {rel_path}", f"lint_gdscript {abs_path}")
+            else:
+                issues = lint_gdscript(abs_path.read_text(encoding="utf-8", errors="replace"), rel_path)
+                status = "FAIL" if any(issue.severity == "error" for issue in issues) else "PARTIAL" if issues else "PASS"
+                observed = format_lint_report(issues, rel_path) if issues else "No lint issues found."
+                _append(
+                    report,
+                    f"Lint changed script {rel_path}",
+                    f"lint_gdscript {abs_path}",
+                    observed,
+                    status,
+                )
 
         if abs_path.suffix == ".tscn":
-            text = abs_path.read_text(encoding="utf-8", errors="replace")
-            tscn_issues = validate_tscn(text)
-            scene = parse_tscn(text)
-            status = "FAIL" if any(issue.severity == "error" for issue in tscn_issues) else "PARTIAL" if tscn_issues else "PASS"
-            observed = "\n".join(str(issue) for issue in tscn_issues) if tscn_issues else "Scene format validation passed."
-            _append(
-                report,
-                f"Validate changed scene file {rel_path}",
-                f"validate_tscn {abs_path}",
-                observed,
-                status,
-            )
-
-            resource_issues = validate_resources(abs_path, project_root)
-            _append(
-                report,
-                f"Validate scene resources for {rel_path}",
-                f"validate_resources {abs_path}",
-                "\n".join(resource_issues) if resource_issues else "All scene resources resolved successfully.",
-                "FAIL" if resource_issues else "PASS",
-            )
-
-            ui_warnings = validate_ui_layout(scene)
-            if any(node.type == "Control" or node.type.endswith("Container") for node in scene.nodes):
+            cached = validation_suite.get("tscn-validate")
+            if cached:
+                _use_cached(report, cached, f"Validate changed scene file {rel_path}", f"validate_tscn {abs_path}")
+            else:
+                text = abs_path.read_text(encoding="utf-8", errors="replace")
+                tscn_issues = validate_tscn(text)
+                scene = parse_tscn(text)
+                status = "FAIL" if any(issue.severity == "error" for issue in tscn_issues) else "PARTIAL" if tscn_issues else "PASS"
+                observed = "\n".join(str(issue) for issue in tscn_issues) if tscn_issues else "Scene format validation passed."
                 _append(
                     report,
-                    f"Validate UI layout conventions for {rel_path}",
-                    f"validate_ui_layout {abs_path}",
-                    "\n".join(ui_warnings) if ui_warnings else "UI layout checks passed.",
-                    "PARTIAL" if ui_warnings else "PASS",
+                    f"Validate changed scene file {rel_path}",
+                    f"validate_tscn {abs_path}",
+                    observed,
+                    status,
                 )
 
-            audio_warnings = validate_audio_nodes(scene, project_root)
-            if any("AudioStreamPlayer" in (node.type or "") for node in scene.nodes):
+            cached = validation_suite.get("scene-resources")
+            if cached:
+                _use_cached(report, cached, f"Validate scene resources for {rel_path}", f"validate_resources {abs_path}")
+            else:
+                resource_issues = validate_resources(abs_path, project_root)
                 _append(
                     report,
-                    f"Validate audio nodes for {rel_path}",
-                    f"validate_audio_nodes {abs_path}",
-                    "\n".join(audio_warnings) if audio_warnings else "Audio node checks passed.",
-                    "PARTIAL" if audio_warnings else "PASS",
+                    f"Validate scene resources for {rel_path}",
+                    f"validate_resources {abs_path}",
+                    "\n".join(resource_issues) if resource_issues else "All scene resources resolved successfully.",
+                    "FAIL" if resource_issues else "PASS",
                 )
 
-    consistency = check_consistency(project_root)
-    relevant_consistency = [
-        issue for issue in consistency
-        if issue.file in rel_changed or any(rel in issue.file for rel in rel_changed)
-    ]
-    _append(
-        report,
-        "Check cross-file consistency around the changed systems",
-        f"check_consistency {project_root}",
-        "\n".join(str(issue) for issue in relevant_consistency[:20]) if relevant_consistency else "No relevant consistency issues found.",
-        "FAIL" if any(issue.severity == "error" for issue in relevant_consistency) else "PARTIAL" if relevant_consistency else "PASS",
-    )
+            cached = validation_suite.get("ui-layout")
+            if cached:
+                _use_cached(report, cached, f"Validate UI layout conventions for {rel_path}", f"validate_ui_layout {abs_path}")
+            else:
+                ui_warnings = validate_ui_layout(scene)
+                if any(node.type == "Control" or node.type.endswith("Container") for node in scene.nodes):
+                    _append(
+                        report,
+                        f"Validate UI layout conventions for {rel_path}",
+                        f"validate_ui_layout {abs_path}",
+                        "\n".join(ui_warnings) if ui_warnings else "UI layout checks passed.",
+                        "PARTIAL" if ui_warnings else "PASS",
+                    )
 
-    graph = build_dependency_graph(project_root)
-    orphaned_changed = [path for path in graph.orphans() if path.replace("res://", "") in rel_changed]
-    _append(
-        report,
-        "Check whether changed assets are still connected to the project graph",
-        f"build_dependency_graph {project_root}",
-        "\n".join(orphaned_changed) if orphaned_changed else "Changed assets remain reachable from the project graph.",
-        "PARTIAL" if orphaned_changed else "PASS",
-    )
+            cached = validation_suite.get("audio-nodes")
+            if cached:
+                _use_cached(report, cached, f"Validate audio nodes for {rel_path}", f"validate_audio_nodes {abs_path}")
+            else:
+                audio_warnings = validate_audio_nodes(scene, project_root)
+                if any("AudioStreamPlayer" in (node.type or "") for node in scene.nodes):
+                    _append(
+                        report,
+                        f"Validate audio nodes for {rel_path}",
+                        f"validate_audio_nodes {abs_path}",
+                        "\n".join(audio_warnings) if audio_warnings else "Audio node checks passed.",
+                        "PARTIAL" if audio_warnings else "PASS",
+                    )
 
-    validation = await validate_project(str(project_root), godot_path=godot_path, timeout=30)
-    _append(
-        report,
-        "Launch Godot headless to verify the project still loads",
-        f"{godot_path} --headless --quit",
-        format_validation_for_llm(validation),
-        "PASS" if validation.success else "FAIL",
-    )
+    cached = validation_suite.get("project-consistency")
+    if cached:
+        _use_cached(report, cached, "Check cross-file consistency around the changed systems", f"check_consistency {project_root}")
+    else:
+        consistency = check_consistency(project_root)
+        relevant_consistency = [
+            issue for issue in consistency
+            if issue.file in rel_changed or any(rel in issue.file for rel in rel_changed)
+        ]
+        _append(
+            report,
+            "Check cross-file consistency around the changed systems",
+            f"check_consistency {project_root}",
+            "\n".join(str(issue) for issue in relevant_consistency[:20]) if relevant_consistency else "No relevant consistency issues found.",
+            "FAIL" if any(issue.severity == "error" for issue in relevant_consistency) else "PARTIAL" if relevant_consistency else "PASS",
+        )
+
+    cached = validation_suite.get("dependency-graph")
+    if cached:
+        _use_cached(report, cached, "Check whether changed assets are still connected to the project graph", f"build_dependency_graph {project_root}")
+    else:
+        graph = build_dependency_graph(project_root)
+        orphaned_changed = [path for path in graph.orphans() if path.replace("res://", "") in rel_changed]
+        _append(
+            report,
+            "Check whether changed assets are still connected to the project graph",
+            f"build_dependency_graph {project_root}",
+            "\n".join(orphaned_changed) if orphaned_changed else "Changed assets remain reachable from the project graph.",
+            "PARTIAL" if orphaned_changed else "PASS",
+        )
+
+    cached = validation_suite.get("godot-validate")
+    if cached:
+        _use_cached(report, cached, "Launch Godot headless to verify the project still loads", f"{godot_path} --headless --quit")
+    else:
+        validation = await validate_project(str(project_root), godot_path=godot_path, timeout=30)
+        _append(
+            report,
+            "Launch Godot headless to verify the project still loads",
+            f"{godot_path} --headless --quit",
+            format_validation_for_llm(validation),
+            "PASS" if validation.success else "FAIL",
+        )
 
     design_memory = design_memory or load_design_memory(project_root)
     runtime_snapshot = runtime_snapshot
