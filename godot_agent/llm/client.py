@@ -114,7 +114,7 @@ class LLMClient:
         metadata: dict,
     ) -> ChatResponse:
         body: dict = {
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [m.to_dict() for m in messages],
             "metadata": metadata,
             "stream": False,
         }

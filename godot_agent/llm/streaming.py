@@ -50,7 +50,7 @@ async def _stream_via_backend(
 ) -> ChatResponse:
     """Stream via backend orchestration API."""
     body: dict = {
-        "messages": [{"role": m.role, "content": m.content} for m in messages],
+        "messages": [m.to_dict() for m in messages],
         "metadata": route_metadata,
         "stream": True,
     }

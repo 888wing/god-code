@@ -41,7 +41,7 @@ MODE_SPECS: dict[InteractionMode, ModeSpec] = {
             "get_runtime_state", "get_events_since", "capture_viewport",
             "compare_baseline", "report_failure",
             "slice_sprite_sheet", "validate_sprite_imports",
-            "analyze_screenshot", "score_screenshot",
+            "generate_sprite", "web_search",
         },
     ),
     "plan": ModeSpec(
@@ -127,7 +127,7 @@ MODE_SPECS: dict[InteractionMode, ModeSpec] = {
             "get_runtime_state", "get_events_since", "capture_viewport",
             "compare_baseline", "report_failure",
             "slice_sprite_sheet", "validate_sprite_imports",
-            "analyze_screenshot", "score_screenshot",
+            "generate_sprite", "web_search",
         },
     ),
 }

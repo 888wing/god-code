@@ -271,20 +271,36 @@ def test_visual_iteration_config_defaults():
     assert cfg.max_visual_iterations == 3
 
 
-def test_vision_tools_in_apply_mode():
-    """Vision tools are in the apply mode allowlist."""
+def test_vision_tools_not_in_apply_mode():
+    """Vision tools removed from apply mode until vision model wiring is done."""
     from godot_agent.runtime.modes import allowed_tools_for_mode
     tools = allowed_tools_for_mode("apply")
-    assert "analyze_screenshot" in tools
-    assert "score_screenshot" in tools
+    assert "analyze_screenshot" not in tools
+    assert "score_screenshot" not in tools
 
 
-def test_vision_tools_in_fix_mode():
-    """Vision tools are in the fix mode allowlist."""
+def test_vision_tools_not_in_fix_mode():
+    """Vision tools removed from fix mode until vision model wiring is done."""
     from godot_agent.runtime.modes import allowed_tools_for_mode
     tools = allowed_tools_for_mode("fix")
-    assert "analyze_screenshot" in tools
-    assert "score_screenshot" in tools
+    assert "analyze_screenshot" not in tools
+    assert "score_screenshot" not in tools
+
+
+def test_generate_sprite_and_web_search_in_apply_mode():
+    """generate_sprite and web_search are in the apply mode allowlist."""
+    from godot_agent.runtime.modes import allowed_tools_for_mode
+    tools = allowed_tools_for_mode("apply")
+    assert "generate_sprite" in tools
+    assert "web_search" in tools
+
+
+def test_generate_sprite_and_web_search_in_fix_mode():
+    """generate_sprite and web_search are in the fix mode allowlist."""
+    from godot_agent.runtime.modes import allowed_tools_for_mode
+    tools = allowed_tools_for_mode("fix")
+    assert "generate_sprite" in tools
+    assert "web_search" in tools
 
 
 def test_vision_tools_in_registry():
