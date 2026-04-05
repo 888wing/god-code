@@ -1,8 +1,8 @@
-# godot_agent/cli.py
+# godot_agent/cli/commands.py
+"""Click commands for the god-code CLI."""
 from __future__ import annotations
 
 import asyncio
-import html
 import json
 import logging
 import sys
@@ -12,15 +12,12 @@ from pathlib import Path
 import click
 import httpx
 
-from godot_agent.agents.dispatcher import AgentDispatcher
 from godot_agent.llm.client import LLMClient, LLMConfig
 from godot_agent.llm.vision import encode_image
-from godot_agent.prompts.assembler import PromptAssembler, PromptContext
 from godot_agent.prompts.skill_selector import (
     available_skills,
     normalize_skill_mode,
     normalize_skill_name,
-    resolve_skills,
     sanitize_skill_keys,
     skill_label,
 )
@@ -30,11 +27,8 @@ from godot_agent.runtime.design_memory import (
     GameplayIntentProfile,
     load_design_memory,
     resolved_asset_spec,
-    resolved_polish_profile,
     resolved_quality_target,
-    update_design_memory,
 )
-from godot_agent.runtime.engine import ConversationEngine
 from godot_agent.runtime.intent_resolver import (
     apply_intent_answers,
     intent_questions_for_profile,
@@ -42,67 +36,84 @@ from godot_agent.runtime.intent_resolver import (
     resolve_gameplay_intent,
     should_prompt_for_intent,
 )
-from godot_agent.runtime.modes import get_mode_spec, normalize_mode
-from godot_agent.runtime.providers import (
-    PROVIDER_PRESETS,
-    REASONING_EFFORT_LEVELS,
-    infer_provider,
-    normalize_provider,
-)
-from godot_agent.runtime.session import list_sessions, load_latest_session, load_session, save_session
-from godot_agent.tools.analysis_tools import (
-    AnalyzeImpactTool,
-    CheckConsistencyTool,
-    PlanUILayoutTool,
-    ProjectDependencyGraphTool,
-    ScaffoldAudioTool,
-    ValidateAudioNodesTool,
-    ValidateUILayoutTool,
-    ValidateProjectTool,
-)
+from godot_agent.runtime.modes import normalize_mode
+from godot_agent.runtime.providers import PROVIDER_PRESETS
+from godot_agent.runtime.session import list_sessions, load_latest_session, load_session
 from godot_agent.tools.editor_bridge import (
-    GetRuntimeSnapshotTool,
     ListContractsTool,
     ListScenariosTool,
-    RunPlaytestTool,
     RunScriptedPlaytestTool,
 )
-from godot_agent.tools.image_gen import GenerateSpriteTool
-from godot_agent.tools.runtime_harness import (
-    AdvanceTicksTool,
-    CaptureViewportTool,
-    CompareBaselineTool,
-    GetEventsSinceTool,
-    GetRuntimeStateTool,
-    LoadSceneTool,
-    PressActionTool,
-    ReportFailureTool,
-    SetFixtureTool,
-    SliceSpriteSheetTool,
-    ValidateSpriteImportsTool,
-)
-from godot_agent.tools.web_search import WebSearchTool
-from godot_agent.tools.file_ops import EditFileTool, ReadFileTool, WriteFileTool
-from godot_agent.tools.git import GitTool
-from godot_agent.tools.godot_cli import RunGodotTool
-from godot_agent.tools.list_dir import ListDirTool
-from godot_agent.tools.registry import ToolRegistry
-from godot_agent.tools.scene_tools import (
-    AddSceneConnectionTool,
-    AddSceneNodeTool,
-    ReadSceneTool,
-    RemoveSceneNodeTool,
-    SceneTreeTool,
-    WriteScenePropertyTool,
-)
-from godot_agent.tools.screenshot import ScreenshotTool
-from godot_agent.tools.search import GlobTool, GrepTool
-from godot_agent.tools.shell import RunShellTool
-from godot_agent.tools.memory_tool import ReadDesignMemoryTool, UpdateDesignMemoryTool
-from godot_agent.tools.script_tools import EditScriptTool, LintScriptTool, ReadScriptTool
 from godot_agent.tui.input_handler import MenuOption, resolve_menu_choice
 
+from godot_agent.cli.engine_wiring import (
+    _apply_provider_preset,
+    _has_usable_provider_auth,
+    _is_interactive_terminal,
+    _load_or_setup_config as _load_or_setup_config_impl,
+    _normalize_reasoning_effort,
+    _persist_config_updates,
+    _provider_auth_issue,
+    _save_config_data,
+    _sync_provider_from_model,
+    _wire_engine_callbacks,
+    build_engine as _build_engine_impl,
+    build_registry,
+)
+from godot_agent.cli.helpers import (
+    _asset_spec_dict,
+    _cd_argument,
+    _command_argument,
+    _format_intent_inline,
+    _format_skill_list,
+    _has_meaningful_input,
+    _intent_profile_dict,
+    _is_multiline_terminator,
+    _multiline_initial_fragment,
+    _persist_intent_profile,
+    _polish_profile_dict,
+    _project_details,
+    _quality_target,
+    _resolved_active_skill_keys,
+    _save_chat_session,
+    _set_arguments,
+    _starts_multiline_input,
+    _toolbar_markup,
+)
+from godot_agent.cli.menus import (
+    _MULTILINE_SETTING_KEYS,
+    _SECRET_SETTING_KEYS,
+    _effort_menu_options,
+    _format_setting_display_value,
+    _main_menu_options,
+    _mode_menu_options,
+    _model_menu_options,
+    _provider_menu_options,
+    _session_menu_options,
+    _setting_value_menu_options,
+    _settings_menu_options,
+    _skill_menu_options,
+)
+
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Monkeypatch-friendly indirection: tests do
+#   monkeypatch.setattr("godot_agent.cli.build_engine", ...)
+# which replaces the attribute on the *package* module.  The helpers below
+# resolve names through that package module at call time so that patches are
+# respected without modifying any test code.
+# ---------------------------------------------------------------------------
+
+def _pkg_attr(name: str, fallback):
+    """Look up *name* on the ``godot_agent.cli`` package module."""
+    import sys
+    pkg = sys.modules.get("godot_agent.cli")
+    if pkg is not None:
+        return getattr(pkg, name, fallback)
+    return fallback
+
 
 _PROVIDERS = {
     "1": {
@@ -148,611 +159,29 @@ _PROVIDERS = {
 }
 
 
-def _has_meaningful_input(value: str) -> bool:
-    return any(ch.isprintable() and not ch.isspace() for ch in value)
-
-
-def _command_argument(value: str, command: str) -> str | None:
-    stripped = value.strip()
-    if stripped == command:
-        return ""
-    prefix = f"{command} "
-    if not stripped.startswith(prefix):
-        return None
-    parts = stripped.split(None, 1)
-    return parts[1].strip() if len(parts) > 1 else ""
-
-
-def _set_arguments(value: str) -> tuple[str, str] | None:
-    stripped = value.strip()
-    if stripped == "/set":
-        return None
-    if not stripped.startswith("/set "):
-        return None
-    parts = stripped.split(None, 2)
-    if len(parts) != 3:
-        return None
-    return parts[1], parts[2]
-
-
-def _cd_argument(value: str) -> str | None:
-    for command in ("/cd", "cd"):
-        arg = _command_argument(value, command)
-        if arg is not None:
-            return arg
-    return None
-
-
-def _starts_multiline_input(value: str) -> bool:
-    return value.strip().startswith('"""')
-
-
-def _multiline_initial_fragment(value: str) -> str:
-    stripped = value.strip()
-    return stripped[3:] if stripped.startswith('"""') else ""
-
-
-def _is_multiline_terminator(value: str | None) -> bool:
-    return value is None or value.strip() == '"""'
-
-
-def _mode_menu_options() -> list[MenuOption]:
-    return [
-        MenuOption(name, get_mode_spec(name).label, get_mode_spec(name).description)
-        for name in ("apply", "plan", "explain", "review", "fix")
-    ]
-
-
-def _provider_menu_options() -> list[MenuOption]:
-    return [
-        MenuOption(
-            provider,
-            preset.name,
-            preset.model or "Custom API configuration",
-            aliases=(provider,),
-        )
-        for provider, preset in PROVIDER_PRESETS.items()
-    ]
-
-
-def _effort_menu_options() -> list[MenuOption]:
-    descriptions = {
-        "auto": "Let the provider decide.",
-        "minimal": "Fastest possible reasoning.",
-        "low": "Light reasoning for straightforward work.",
-        "medium": "Balanced depth and latency.",
-        "high": "Deeper reasoning for harder tasks.",
-        "xhigh": "Maximum reasoning depth.",
-    }
-    return [
-        MenuOption(level, level, descriptions.get(level, ""))
-        for level in REASONING_EFFORT_LEVELS
-    ]
-
-
-def _model_menu_options(cfg: AgentConfig) -> list[MenuOption]:
-    options: list[MenuOption] = []
-    seen: set[str] = set()
-
-    def add(value: str, label: str, description: str, aliases: tuple[str, ...] = ()) -> None:
-        normalized = value.strip()
-        if not normalized or normalized in seen:
-            return
-        seen.add(normalized)
-        options.append(MenuOption(normalized, label, description, aliases=aliases))
-
-    add(cfg.model, f"{cfg.model}", "Current model", aliases=("current",))
-    preset = PROVIDER_PRESETS.get(cfg.provider)
-    if preset and preset.model and preset.model != cfg.model:
-        add(preset.model, f"{preset.model}", f"{preset.name} default model", aliases=("default",))
-    add("__custom__", "Custom model...", "Type any model identifier manually", aliases=("custom", "manual"))
-    return options
-
-
-def _skill_menu_options() -> list[MenuOption]:
-    return [
-        MenuOption(skill.key, skill.name, skill.summary, aliases=skill.aliases)
-        for skill in available_skills()
-    ]
-
-
-def _settings_menu_options() -> list[MenuOption]:
-    descriptions = {
-        "api_key": "Update the provider API key (hidden input).",
-        "provider": "Switch provider family and default base URL/model.",
-        "base_url": "Edit the API base URL manually.",
-        "model": "Switch the active model name.",
-        "reasoning_effort": "Change reasoning depth.",
-        "computer_use": "Enable OpenAI Responses computer-use requests for compatible tooling.",
-        "computer_use_environment": "Computer-use environment label (browser, desktop, vm).",
-        "computer_use_display_width": "Computer-use display width in pixels.",
-        "computer_use_display_height": "Computer-use display height in pixels.",
-        "oauth_token": "Update the OAuth token (hidden input).",
-        "max_turns": "Maximum tool-calling turns per request.",
-        "max_tokens": "Maximum output tokens per request.",
-        "temperature": "Sampling temperature for supported providers.",
-        "godot_path": "Path to the Godot executable.",
-        "language": "Preferred response language.",
-        "verbosity": "Response detail level.",
-        "mode": "Change interaction mode.",
-        "auto_validate": "Toggle post-change validation.",
-        "auto_commit": "Toggle commit suggestion after edits.",
-        "screenshot_max_iterations": "Max screenshot stabilization attempts.",
-        "token_budget": "Session token budget, 0 = unlimited.",
-        "safety": "Shell safety policy.",
-        "streaming": "Toggle streamed assistant output.",
-        "autosave_session": "Persist chat state after each turn.",
-        "extra_prompt": "Append custom system instructions.",
-        "session_dir": "Directory used to store chat sessions.",
-    }
-    return [
-        MenuOption(key, key, descriptions.get(key, ""))
-        for key in (
-            "api_key", "provider", "base_url", "model", "reasoning_effort", "oauth_token",
-            "computer_use", "computer_use_environment", "computer_use_display_width", "computer_use_display_height",
-            "max_turns", "max_tokens", "temperature", "godot_path",
-            "language", "verbosity", "mode", "auto_validate", "auto_commit",
-            "screenshot_max_iterations", "token_budget", "safety", "streaming",
-            "autosave_session", "extra_prompt", "session_dir",
-        )
-    ]
-
-
-def _boolean_menu_options() -> list[MenuOption]:
-    return [
-        MenuOption("true", "Enable", "Set the option to true.", aliases=("yes", "on", "1")),
-        MenuOption("false", "Disable", "Set the option to false.", aliases=("no", "off", "0")),
-    ]
-
-
-def _language_menu_options() -> list[MenuOption]:
-    return [
-        MenuOption("en", "English", "Respond in English.", aliases=("english",)),
-        MenuOption("zh-TW", "Traditional Chinese", "Respond in Traditional Chinese.", aliases=("zh", "zh-tw", "traditional chinese")),
-        MenuOption("ja", "Japanese", "Respond in Japanese.", aliases=("jp", "japanese")),
-    ]
-
-
-def _verbosity_menu_options() -> list[MenuOption]:
-    return [
-        MenuOption("concise", "Concise", "Short, high-signal responses."),
-        MenuOption("normal", "Normal", "Balanced detail."),
-        MenuOption("detailed", "Detailed", "More explanation and context."),
-    ]
-
-
-def _safety_menu_options() -> list[MenuOption]:
-    return [
-        MenuOption("strict", "Strict", "Most conservative shell policy."),
-        MenuOption("normal", "Normal", "Balanced shell policy."),
-        MenuOption("permissive", "Permissive", "Looser shell policy."),
-    ]
-
-
-def _setting_value_menu_options(key: str) -> list[MenuOption] | None:
-    if key == "mode":
-        return _mode_menu_options()
-    if key == "provider":
-        return _provider_menu_options()
-    if key == "reasoning_effort":
-        return _effort_menu_options()
-    if key in {"auto_validate", "auto_commit", "streaming", "autosave_session", "computer_use"}:
-        return _boolean_menu_options()
-    if key == "language":
-        return _language_menu_options()
-    if key == "verbosity":
-        return _verbosity_menu_options()
-    if key == "safety":
-        return _safety_menu_options()
-    return None
-
-
-_SECRET_SETTING_KEYS = {"api_key", "oauth_token"}
-_MULTILINE_SETTING_KEYS = {"extra_prompt"}
-
-
-def _session_menu_options(records) -> list[MenuOption]:
-    options: list[MenuOption] = []
-    for record in records:
-        subtitle = record.project_name or record.project_path or "-"
-        description = f"{record.mode or '-'} | {subtitle} | {record.title or 'Untitled session'}"
-        options.append(MenuOption(record.session_id, record.session_id, description, aliases=("latest",) if not options else ()))
-    return options
-
-
-def _main_menu_options() -> list[MenuOption]:
-    return [
-        MenuOption("mode", "Change mode", "Switch between apply, plan, explain, review, and fix."),
-        MenuOption("provider", "Switch provider", "Pick an LLM provider preset."),
-        MenuOption("model", "Switch model", "Pick the current/default model or enter one manually."),
-        MenuOption("effort", "Set reasoning effort", "Adjust reasoning depth."),
-        MenuOption("skills", "Manage skills", "Inspect or override the internal domain skills."),
-        MenuOption("intent", "Gameplay intent", "Inspect or confirm gameplay direction."),
-        MenuOption("quality", "Quality target", "Show whether the project is targeting prototype or demo output."),
-        MenuOption("assetspec", "Asset spec", "Show current sprite and asset acceptance constraints."),
-        MenuOption("playtest", "Run playtest", "Run scripted playtest contracts for the current project."),
-        MenuOption("scenarios", "List scenarios", "Show built-in playtest scenarios and relevance."),
-        MenuOption("contracts", "Show contracts", "Inspect scripted-route contract details."),
-        MenuOption("resume", "Resume session", "Choose a saved session to restore."),
-        MenuOption("cd", "Change project directory", "Switch the active project root."),
-        MenuOption("set", "Edit setting", "Choose any config field and update it."),
-        MenuOption("workspace", "Show workspace", "Refresh the workspace snapshot."),
-        MenuOption("status", "Show status", "Provider, model, auth, and mode."),
-        MenuOption("settings", "Show settings", "Current config values and descriptions."),
-        MenuOption("sessions", "List sessions", "Show recent saved sessions."),
-        MenuOption("help", "Show commands", "Render the command cheat sheet."),
-        MenuOption("quit", "Quit", "Exit the chat session."),
-    ]
-
-
-def _mask_secret(value: str) -> str:
-    stripped = value.strip()
-    if not stripped:
-        return "(empty)"
-    if len(stripped) <= 8:
-        return "*" * len(stripped)
-    return f"{stripped[:4]}...{stripped[-4:]}"
-
-
-def _format_setting_display_value(key: str, value) -> str:
-    if key in _SECRET_SETTING_KEYS:
-        return _mask_secret(str(value))
-    return str(value)
-
-
-def _save_config_data(config_path: Path, data: dict) -> Path:
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(data, indent=2))
-    config_path.chmod(0o600)
-    return config_path
-
-
-def _persist_config_updates(config_path: Path, updates: dict[str, object]) -> Path:
-    data: dict = {}
-    if config_path.exists():
-        try:
-            data = json.loads(config_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            data = {}
-    for key, value in updates.items():
-        if value is None:
-            data.pop(key, None)
-        else:
-            data[key] = value
-    return _save_config_data(config_path, data)
-
-
-def _is_interactive_terminal() -> bool:
-    return sys.stdin.isatty() and sys.stdout.isatty()
-
-
-def _provider_auth_issue(provider: str, api_key: str = "", oauth_token: str | None = None) -> str | None:
-    normalized_provider = normalize_provider(provider)
-    preset = PROVIDER_PRESETS.get(normalized_provider)
-
-    if normalized_provider == "custom":
-        return None
-
-    if normalized_provider == "openai":
-        if api_key or oauth_token:
-            return None
-        return "OpenAI requires an API key or an OAuth login."
-
-    if not api_key:
-        provider_name = preset.name if preset else normalized_provider
-        return f"{provider_name} requires an API key."
-
-    if preset and preset.key_prefix and not api_key.startswith(preset.key_prefix):
-        return f"Current API key does not look like a {preset.name} key (expected prefix {preset.key_prefix})."
-
-    return None
-
-
-def _has_usable_provider_auth(cfg: AgentConfig) -> bool:
-    return _provider_auth_issue(cfg.provider, cfg.api_key, cfg.oauth_token) is None
-
-
-def _load_or_setup_config(config_path: Path) -> AgentConfig:
-    cfg = load_config(config_path)
-    try:
-        cfg.skill_mode = normalize_skill_mode(cfg.skill_mode)
-    except ValueError:
-        cfg.skill_mode = "auto"
-    cfg.enabled_skills = sanitize_skill_keys(cfg.enabled_skills)
-    cfg.disabled_skills = sanitize_skill_keys(cfg.disabled_skills)
-    if _has_usable_provider_auth(cfg):
-        return cfg
-
-    if _is_interactive_terminal():
-        _run_setup_wizard(config_path)
-        cfg = load_config(config_path)
-        if _has_usable_provider_auth(cfg):
-            return cfg
-
-    raise click.ClickException("Not configured. Run 'god-code setup' first.")
-
-
-def build_registry() -> ToolRegistry:
-    registry = ToolRegistry()
-    for tool_cls in [
-        ReadFileTool, WriteFileTool, EditFileTool, ListDirTool,
-        GrepTool, GlobTool, GitTool, RunShellTool, RunGodotTool, ScreenshotTool,
-        ReadScriptTool, EditScriptTool, LintScriptTool,
-        ReadSceneTool, SceneTreeTool, AddSceneNodeTool, WriteScenePropertyTool,
-        AddSceneConnectionTool, RemoveSceneNodeTool,
-        ValidateProjectTool, CheckConsistencyTool, ProjectDependencyGraphTool, AnalyzeImpactTool,
-        PlanUILayoutTool, ValidateUILayoutTool, ScaffoldAudioTool, ValidateAudioNodesTool,
-        ReadDesignMemoryTool, UpdateDesignMemoryTool,
-        GetRuntimeSnapshotTool, RunPlaytestTool, RunScriptedPlaytestTool, ListScenariosTool, ListContractsTool,
-        LoadSceneTool, SetFixtureTool, PressActionTool, AdvanceTicksTool,
-        GetRuntimeStateTool, GetEventsSinceTool, CaptureViewportTool,
-        CompareBaselineTool, ReportFailureTool,
-        SliceSpriteSheetTool, ValidateSpriteImportsTool,
-        GenerateSpriteTool, WebSearchTool,
-    ]:
-        registry.register(tool_cls())
-    return registry
-
-
-def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
-    from godot_agent.tools.file_ops import set_project_root
-    from godot_agent.tools.shell import set_safety_level
-    set_project_root(project_root)
-    set_safety_level(config.safety)
-
-    llm_config = LLMConfig(
-        api_key=config.api_key,
-        base_url=config.base_url,
-        provider=config.provider,
-        model=config.model,
-        reasoning_effort=config.reasoning_effort,
-        oauth_token=config.oauth_token,
-        max_tokens=config.max_tokens,
-        temperature=config.temperature,
-        computer_use=config.computer_use,
-        computer_use_environment=config.computer_use_environment,
-        computer_use_display_width=config.computer_use_display_width,
-        computer_use_display_height=config.computer_use_display_height,
-    )
-    client = LLMClient(llm_config)
-    registry = build_registry()
-    prompt_assembler = PromptAssembler(
-        PromptContext(
-            project_root=project_root,
-            godot_path=config.godot_path,
-            language=config.language,
-            verbosity=config.verbosity,
-            mode=config.mode,
-            extra_prompt=config.extra_prompt,
-        )
-    )
-    allowed_tools = set(get_mode_spec(config.mode).allowed_tools)
-    dispatcher = AgentDispatcher(
-        client=client,
-        registry=registry,
-        prompt_context=prompt_assembler.context,
-        project_path=str(project_root),
-        godot_path=config.godot_path,
-        base_allowed_tools=allowed_tools,
-    )
-    system_prompt = prompt_assembler.build(
-        user_hint="",
-        skill_mode=config.skill_mode,
-        enabled_skills=config.enabled_skills,
-        disabled_skills=config.disabled_skills,
-        active_tools=[tool.name for tool in registry.list_tools() if tool.name in allowed_tools],
-    )
-    engine = ConversationEngine(
-        client=client,
-        registry=registry,
-        system_prompt=system_prompt,
-        max_tool_rounds=config.max_turns,
-        project_path=str(project_root),
-        godot_path=config.godot_path,
-        auto_validate=config.auto_validate,
-        prompt_assembler=prompt_assembler,
-        mode=config.mode,
-        dispatcher=dispatcher,
-    )
-    engine.skill_mode = config.skill_mode
-    engine.enabled_skills = list(config.enabled_skills)
-    engine.disabled_skills = list(config.disabled_skills)
-    engine.base_allowed_tools = set(allowed_tools)
-    engine.allowed_tools = set(allowed_tools)
-    engine._refresh_tool_scope()
-    engine._refresh_system_prompt()
-    return engine
-
-
-def _project_details(project_root: Path) -> tuple[bool, str | None, dict[str, str]]:
-    info = {
-        "Main Scene": "-",
-        "Resolution": "-",
-        "Autoloads": "-",
-        "Guide": "-",
-        "File Count": "-",
-    }
-    project_file = project_root / "project.godot"
-    if not project_file.exists():
-        return False, None, info
-
-    from godot_agent.godot.project import parse_project_godot
-
-    proj = parse_project_godot(project_file)
-    info.update({
-        "Main Scene": proj.main_scene or "-",
-        "Resolution": f"{proj.viewport_width}x{proj.viewport_height}",
-        "Autoloads": str(len(proj.autoloads)),
-    })
-    return True, proj.name, info
-
-
-def _toolbar_markup(
-    cfg: AgentConfig,
-    project_root: Path,
-    project_name: str | None,
-    intent_genre: str = "-",
-    quality_target: str = "prototype",
-) -> str:
-    mode_label = html.escape(get_mode_spec(cfg.mode).label)
-    provider = html.escape(cfg.provider)
-    model = html.escape(cfg.model)
-    effort = html.escape(cfg.reasoning_effort)
-    skill_mode = html.escape(cfg.skill_mode)
-    project = html.escape(project_name or project_root.name or str(project_root))
-    intent = html.escape(intent_genre or "-")
-    quality = html.escape(quality_target or "prototype")
-    return (
-        f"<b>mode</b>: {mode_label} | "
-        f"<b>provider</b>: {provider} | "
-        f"<b>model</b>: {model} | "
-        f"<b>effort</b>: {effort} | "
-        f"<b>skills</b>: {skill_mode} | "
-        f"<b>intent</b>: {intent} | "
-        f"<b>quality</b>: {quality} | "
-        f"<b>project</b>: {project} | "
-        "<b>triple quotes</b>: multiline | "
-        "<b>/help</b>"
-    )
-
-
-def _resolved_active_skill_keys(engine: ConversationEngine, cfg: AgentConfig) -> list[str]:
-    skills = resolve_skills(
-        engine.last_user_input,
-        engine._recent_context_files(),
-        skill_mode=cfg.skill_mode,
-        enabled_skills=cfg.enabled_skills,
-        disabled_skills=cfg.disabled_skills,
-        intent_profile=engine.intent_profile,
-    )
-    return [skill.key for skill in skills]
-
-
-def _format_skill_list(skill_keys: list[str]) -> str:
-    if not skill_keys:
-        return "-"
-    return ", ".join(skill_label(skill_key) for skill_key in skill_keys)
-
-
-def _intent_profile_dict(engine: ConversationEngine) -> dict[str, object]:
-    return engine.intent_profile.to_dict()
-
-
-def _quality_target(engine: ConversationEngine) -> str:
-    memory = getattr(engine, "design_memory", None)
-    return resolved_quality_target(memory)
-
-
-def _asset_spec_dict(engine: ConversationEngine) -> dict[str, object]:
-    memory = getattr(engine, "design_memory", None)
-    return resolved_asset_spec(memory).to_dict()
-
-
-def _polish_profile_dict(engine: ConversationEngine) -> dict[str, object]:
-    memory = getattr(engine, "design_memory", None)
-    return resolved_polish_profile(memory, quality_target=_quality_target(engine)).to_dict()
-
-
-def _format_intent_inline(profile: dict[str, object]) -> str:
-    genre = str(profile.get("genre", "") or "-")
-    enemy = str(profile.get("enemy_model", "") or "-")
-    confirmed = "confirmed" if profile.get("confirmed") else "inferred"
-    return f"{genre} | {enemy} | {confirmed}"
-
-
-def _persist_intent_profile(project_root: Path, profile: GameplayIntentProfile) -> None:
-    update_design_memory(
-        project_root,
-        section="gameplay_intent",
-        mapping=profile.to_dict(),
-    )
-
-
-def _apply_provider_preset(cfg: AgentConfig, provider_name: str) -> str:
-    provider = normalize_provider(provider_name)
-    if provider not in PROVIDER_PRESETS:
-        available = ", ".join(PROVIDER_PRESETS.keys())
-        raise ValueError(f"Unknown provider: {provider_name}. Available: {available}")
-    preset = PROVIDER_PRESETS[provider]
-    cfg.provider = provider
-    if preset.base_url:
-        cfg.base_url = preset.base_url
-    if preset.model:
-        cfg.model = preset.model
-    return provider
-
-
-def _sync_provider_from_model(cfg: AgentConfig, previous_provider: str, previous_base_url: str) -> str:
-    inferred = infer_provider(base_url=cfg.base_url, model=cfg.model, provider="")
-    cfg.provider = inferred
-    previous_preset = PROVIDER_PRESETS.get(previous_provider)
-    new_preset = PROVIDER_PRESETS.get(inferred)
-    if (
-        new_preset
-        and new_preset.base_url
-        and ((previous_preset and previous_base_url == previous_preset.base_url) or not cfg.base_url)
-    ):
-        cfg.base_url = new_preset.base_url
-    return inferred
-
-
-def _normalize_reasoning_effort(value: str) -> str:
-    effort = value.strip().lower()
-    if effort not in REASONING_EFFORT_LEVELS:
-        allowed = ", ".join(REASONING_EFFORT_LEVELS)
-        raise ValueError(f"Unknown effort: {value}. Allowed: {allowed}")
-    return effort
-
-
-def _wire_engine_callbacks(
-    engine: ConversationEngine,
-    display,
-    cfg: AgentConfig,
-) -> None:
-    engine.on_tool_start = lambda name, args: display.tool_start(name, engine._summarize_args(name, args))
-    engine.on_tool_end = lambda name, ok, summary: display.tool_result(name, ok, summary)
-    engine.on_diff = lambda old, new, fn: display.show_diff(old, new, fn)
-    engine.on_event = display.handle_event
-    engine.auto_commit = cfg.auto_commit
-    engine.use_streaming = cfg.streaming
-    if cfg.streaming:
-        engine.on_stream_start = display.agent_streaming_start
-        engine.on_stream_chunk = display.agent_streaming_chunk
-        engine.on_stream_end = display.agent_streaming_end
-    else:
-        engine.on_stream_start = None
-        engine.on_stream_chunk = None
-        engine.on_stream_end = None
-    engine.on_commit_suggest = lambda: display.info("Changes made. Run 'git add -A && git commit' to save.")
-
-
-def _save_chat_session(
-    cfg: AgentConfig,
-    session_id: str,
-    engine: ConversationEngine,
-    project_root: Path,
-    project_name: str | None,
-) -> Path:
-    return save_session(
-        cfg.session_dir,
-        session_id,
-        engine.messages,
-        project_path=str(project_root),
-        project_name=project_name,
-        model=cfg.model,
-        mode=cfg.mode,
-        skill_mode=cfg.skill_mode,
-        enabled_skills=cfg.enabled_skills,
-        disabled_skills=cfg.disabled_skills,
-        active_skills=_resolved_active_skill_keys(engine, cfg),
-        gameplay_intent=_intent_profile_dict(engine),
-    )
+_VERSION = "0.6.1"
 
 
 def _is_configured() -> bool:
     """Check if god-code has been configured with an API key."""
     cfg = load_config(default_config_path())
     return _has_usable_provider_auth(cfg)
+
+
+def _check_update() -> None:
+    """Check PyPI for a newer version. Non-blocking, fails silently."""
+    try:
+        import httpx as _httpx
+        from packaging.version import Version
+        resp = _httpx.get("https://pypi.org/pypi/god-code/json", timeout=3)
+        if resp.status_code == 200:
+            latest = resp.json()["info"]["version"]
+            if Version(latest) > Version(_VERSION):
+                click.secho(f"  Update available: {_VERSION} → {latest}", fg="yellow")
+                click.echo(f"  Run: pip install --upgrade god-code")
+                click.echo()
+    except Exception:
+        pass
 
 
 def _run_setup_wizard(config_path: Path | None = None) -> None:
@@ -860,24 +289,7 @@ def _run_setup_wizard(config_path: Path | None = None) -> None:
     click.echo()
 
 
-_VERSION = "0.6.1"
-
-
-def _check_update() -> None:
-    """Check PyPI for a newer version. Non-blocking, fails silently."""
-    try:
-        import httpx as _httpx
-        from packaging.version import Version
-        resp = _httpx.get("https://pypi.org/pypi/god-code/json", timeout=3)
-        if resp.status_code == 200:
-            latest = resp.json()["info"]["version"]
-            if Version(latest) > Version(_VERSION):
-                click.secho(f"  Update available: {_VERSION} → {latest}", fg="yellow")
-                click.echo(f"  Run: pip install --upgrade god-code")
-                click.echo()
-    except Exception:
-        pass
-
+# ── Click group & subcommands ──────────────────────────────────
 
 @click.group(invoke_without_command=True)
 @click.version_option(version=_VERSION)
@@ -885,7 +297,7 @@ def _check_update() -> None:
 def main(ctx):
     """God Code -- AI coding assistant for Godot game development."""
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
-    _check_update()
+    _pkg_attr("_check_update", _check_update)()
     if ctx.invoked_subcommand is None:
         if not _is_configured():
             _run_setup_wizard()
@@ -970,14 +382,14 @@ def ask(prompt: str, project: str, config: str | None, image: tuple[str, ...], p
     from godot_agent.tui.display import ChatDisplay
 
     config_path = Path(config) if config else default_config_path()
-    cfg = _load_or_setup_config(config_path)
+    cfg = _pkg_attr("_load_or_setup_config", _load_or_setup_config_impl)(config_path)
     try:
         cfg.mode = normalize_mode(cfg.mode)
     except ValueError:
         cfg.mode = "apply"
     project_root = Path(project).resolve()
     show_rich = sys.stdout.isatty() and not plain
-    engine = build_engine(cfg, project_root)
+    engine = _pkg_attr("build_engine", _build_engine_impl)(cfg, project_root)
     display = ChatDisplay()
     active_skills = _resolved_active_skill_keys(engine, cfg)
 
@@ -1044,10 +456,11 @@ def ask(prompt: str, project: str, config: str | None, image: tuple[str, ...], p
 def chat(project: str = ".", config: str | None = None):
     """Start an interactive chat session."""
     from godot_agent.tui.display import ChatDisplay
+    from godot_agent.runtime.providers import infer_provider
 
     display = ChatDisplay()
     config_path = Path(config) if config else default_config_path()
-    cfg = _load_or_setup_config(config_path)
+    cfg = _pkg_attr("_load_or_setup_config", _load_or_setup_config_impl)(config_path)
     try:
         cfg.mode = normalize_mode(cfg.mode)
     except ValueError:
@@ -1057,7 +470,7 @@ def chat(project: str = ".", config: str | None = None):
     session_id = str(uuid.uuid4())[:8]
     has_project, proj_name, project_info = _project_details(project_root)
 
-    engine = build_engine(cfg, project_root)
+    engine = _pkg_attr("build_engine", _build_engine_impl)(cfg, project_root)
     _wire_engine_callbacks(engine, display, cfg)
     display.welcome(
         session_id,
@@ -1142,7 +555,7 @@ def chat(project: str = ".", config: str | None = None):
 
         project_root = new_root.resolve()
         has_project, proj_name, project_info = _project_details(project_root)
-        engine = build_engine(cfg, project_root)
+        engine = _pkg_attr("build_engine", _build_engine_impl)(cfg, project_root)
         _wire_engine_callbacks(engine, display, cfg)
 
         carried_messages = seed_messages if seed_messages is not None else old_messages
