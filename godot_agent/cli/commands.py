@@ -1696,5 +1696,75 @@ def update_skill():
         click.secho(f"Failed: {e}", fg="red")
 
 
+@main.command("setup-bridge")
+@click.argument("project", default=".")
+def setup_bridge(project: str):
+    """Install GodCodeBridge plugin into a Godot project."""
+    import shutil
+
+    project_path = Path(project).resolve()
+    project_godot = project_path / "project.godot"
+
+    # Validate project
+    if not project_godot.exists():
+        click.secho(
+            f"Error: No project.godot found in {project_path}",
+            fg="red",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    # Locate bundled plugin source
+    source_dir = Path(__file__).resolve().parent.parent / "addons" / "god_code_bridge"
+    if not source_dir.is_dir():
+        click.secho(
+            f"Error: Plugin source not found at {source_dir}",
+            fg="red",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    # Copy plugin to project addons/
+    dest_dir = project_path / "addons" / "god_code_bridge"
+    if dest_dir.exists():
+        click.echo(f"  Updating existing plugin at {dest_dir}")
+        shutil.rmtree(dest_dir)
+    else:
+        click.echo(f"  Installing plugin to {dest_dir}")
+    dest_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(str(source_dir), str(dest_dir))
+    click.secho("  Plugin files copied.", fg="green")
+
+    # Add autoload entry to project.godot
+    autoload_line = 'GodCodeBridge="*res://addons/god_code_bridge/god_code_bridge.gd"'
+    text = project_godot.read_text(encoding="utf-8")
+    if "GodCodeBridge" in text:
+        click.echo("  Autoload entry already exists in project.godot.")
+    elif "[autoload]" in text:
+        # Append under existing [autoload] section
+        text = text.replace(
+            "[autoload]",
+            f"[autoload]\n\n{autoload_line}",
+        )
+        project_godot.write_text(text, encoding="utf-8")
+        click.secho("  Autoload entry added to project.godot.", fg="green")
+    else:
+        # No [autoload] section yet — append one at the end
+        if not text.endswith("\n"):
+            text += "\n"
+        text += f"\n[autoload]\n\n{autoload_line}\n"
+        project_godot.write_text(text, encoding="utf-8")
+        click.secho("  [autoload] section created in project.godot.", fg="green")
+
+    click.echo()
+    click.secho("  GodCodeBridge installed successfully!", fg="cyan", bold=True)
+    click.echo()
+    click.echo("  Next steps:")
+    click.echo("    1. Restart Godot (or reload the project)")
+    click.echo("    2. Run your game — the bridge listens on TCP port 9394")
+    click.echo("    3. Use 'god-code chat' to connect the AI agent")
+    click.echo()
+
+
 if __name__ == "__main__":
     main()
