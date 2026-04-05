@@ -53,3 +53,12 @@ async def test_quality_gate_reports_ui_and_audio_warnings(tmp_path: Path):
 
     assert any(check.name == "ui-layout" for check in report.warnings)
     assert any(check.name == "audio-nodes" for check in report.warnings)
+
+
+@pytest.mark.asyncio
+async def test_quality_gate_accepts_validation_suite():
+    """run_quality_gate can accept a pre-run ValidationSuite."""
+    from godot_agent.runtime.quality_gate import run_quality_gate
+    import inspect
+    sig = inspect.signature(run_quality_gate)
+    assert "validation_suite" in sig.parameters

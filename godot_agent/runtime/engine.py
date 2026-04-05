@@ -26,6 +26,7 @@ from godot_agent.runtime.quality_gate import (
 )
 from godot_agent.runtime.runtime_bridge import RuntimeSnapshot, get_runtime_snapshot
 from godot_agent.runtime.reviewer import ReviewReport, format_review_report, review_changes
+from godot_agent.runtime.validation_checks import ValidationSuite
 from godot_agent.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
@@ -603,15 +604,19 @@ class ConversationEngine:
 
         return tool_names_used, modified_files
 
-    async def _run_quality_gate_for_round(self, modified_files: set[str], turn: TurnStats) -> None:
+    async def _run_quality_gate_for_round(self, modified_files: set[str], turn: TurnStats) -> ValidationSuite | None:
         if not modified_files or not self.project_path or not self.auto_validate:
-            return
+            return None
+
+        suite = ValidationSuite(self.project_path, modified_files)
+        await suite.run_all()
 
         self._emit_event("quality_gate_started", "Running Godot quality gate", changed_files=len(modified_files))
         report = await run_quality_gate(
             project_root=Path(self.project_path),
             changed_files=modified_files,
             godot_path=self.godot_path,
+            validation_suite=suite,
         )
         self.last_impact_report = analyze_change_impact(Path(self.project_path), modified_files)
         self.last_quality_report = report
@@ -636,8 +641,9 @@ class ConversationEngine:
                 f"[SYSTEM] Quality gate after your changes:\n{format_quality_gate_report(report)}\n{guidance}"
             )
         )
+        return suite
 
-    async def _run_reviewer_for_round(self, modified_files: set[str]) -> None:
+    async def _run_reviewer_for_round(self, modified_files: set[str], suite: ValidationSuite | None = None) -> None:
         if not modified_files or not self.project_path:
             return
 
@@ -661,6 +667,7 @@ class ConversationEngine:
                 impact_report=self.last_impact_report,
                 runtime_snapshot=get_runtime_snapshot(),
                 playtest_report=self.last_playtest_report,
+                validation_suite=suite,
             )
         self.last_review_report = report
         self._emit_event("reviewer_finished", f"Reviewer verdict: {report.verdict}", verdict=report.verdict)
@@ -709,6 +716,7 @@ class ConversationEngine:
     async def _run_loop(self, tools: list[dict] | None, use_streaming: bool = False) -> str:
         turn = TurnStats()
         state = LoopState()
+        suite: ValidationSuite | None = None
 
         while state.phase is not LoopPhase.DONE:
             if state.round_index > self.max_tool_rounds:
@@ -766,12 +774,12 @@ class ConversationEngine:
                 continue
 
             if state.phase is LoopPhase.RUN_QUALITY_GATE:
-                await self._run_quality_gate_for_round(state.modified_files, turn)
+                suite = await self._run_quality_gate_for_round(state.modified_files, turn)
                 state.phase = LoopPhase.RUN_REVIEWER
                 continue
 
             if state.phase is LoopPhase.RUN_REVIEWER:
-                await self._run_reviewer_for_round(state.modified_files)
+                await self._run_reviewer_for_round(state.modified_files, suite=suite)
                 state.phase = LoopPhase.RUN_PLAYTEST_ANALYST
                 continue
 

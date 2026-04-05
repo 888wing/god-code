@@ -16,6 +16,7 @@ from godot_agent.godot.scene_parser import parse_tscn
 from godot_agent.godot.tscn_validator import validate_tscn
 from godot_agent.godot.ui_layout_advisor import validate_ui_layout
 from godot_agent.runtime.error_loop import format_validation_for_llm, validate_project
+from godot_agent.runtime.validation_checks import ValidationSuite
 
 
 @dataclass
@@ -107,6 +108,7 @@ async def run_quality_gate(
     project_root: Path,
     changed_files: set[str],
     godot_path: str = "godot",
+    validation_suite: ValidationSuite | None = None,
 ) -> QualityGateReport:
     """Run deterministic quality checks after file mutations."""
 

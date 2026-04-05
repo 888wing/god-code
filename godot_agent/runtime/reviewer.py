@@ -20,6 +20,7 @@ from godot_agent.runtime.gameplay_reviewer import review_gameplay_constraints
 from godot_agent.runtime.playtest_harness import PlaytestReport, run_playtest_harness
 from godot_agent.runtime.quality_gate import QualityGateReport
 from godot_agent.runtime.runtime_bridge import RuntimeSnapshot
+from godot_agent.runtime.validation_checks import ValidationSuite
 
 
 @dataclass
@@ -77,6 +78,7 @@ async def review_changes(
     impact_report: ImpactAnalysisReport | None = None,
     runtime_snapshot: RuntimeSnapshot | None = None,
     playtest_report: PlaytestReport | None = None,
+    validation_suite: ValidationSuite | None = None,
 ) -> ReviewReport:
     """Run a read-only verification pass over changed files."""
 

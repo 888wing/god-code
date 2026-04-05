@@ -92,3 +92,12 @@ async def test_reviewer_includes_demo_polish_warnings(tmp_path: Path):
 
     assert report.verdict == "PARTIAL"
     assert any(check.status == "WARN" for check in report.checks)
+
+
+@pytest.mark.asyncio
+async def test_reviewer_accepts_validation_suite():
+    """review_changes can accept a pre-run ValidationSuite."""
+    from godot_agent.runtime.reviewer import review_changes
+    import inspect
+    sig = inspect.signature(review_changes)
+    assert "validation_suite" in sig.parameters
