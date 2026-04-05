@@ -1,0 +1,18 @@
+{
+  "project": "god-code",
+  "version": "0.8.1",
+  "language": "python",
+  "framework": "click+mcp+pydantic",
+  "component_roots": ["godot_agent"],
+  "test_roots": ["tests"],
+  "ignore_patterns": [
+    "__pycache__",
+    "*.pyc",
+    ".venv",
+    "dist",
+    "*.egg-info",
+    ".pytest_cache"
+  ],
+  "trace_format": "markdown",
+  "archive_after_days": 30
+}

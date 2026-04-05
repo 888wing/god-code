@@ -1,0 +1,208 @@
+{
+  "last_scan": "2026-04-05",
+  "components": {
+    "cli": {
+      "path": "godot_agent/cli/",
+      "type": "entrypoint",
+      "description": "CLI package (Click) — commands, menus, engine wiring, helpers. Split from monolithic cli.py in v0.8.",
+      "last_modified": "2026-04-05",
+      "trace_refs": [
+        "2026-04-04_00-55_runtime-harness-skills-computer-use.md",
+        "2026-04-05_22-50_v08-implementation.md"
+      ],
+      "children": [
+        "godot_agent/cli/__init__.py",
+        "godot_agent/cli/__main__.py",
+        "godot_agent/cli/commands.py",
+        "godot_agent/cli/menus.py",
+        "godot_agent/cli/engine_wiring.py",
+        "godot_agent/cli/helpers.py"
+      ]
+    },
+    "mcp_server": {
+      "path": "godot_agent/mcp_server.py",
+      "type": "entrypoint",
+      "description": "MCP server for Claude Code integration (40+ tools)",
+      "last_modified": "2026-04-04",
+      "trace_refs": ["2026-04-04_00-55_runtime-harness-skills-computer-use.md"]
+    },
+    "tools": {
+      "path": "godot_agent/tools/",
+      "type": "module",
+      "description": "Tool implementations (41 tools: file_ops, search, shell, git, godot_cli, scene_tools, script_tools, vision_analysis, vision_scoring, sprite_qa, etc.)",
+      "last_modified": "2026-04-05",
+      "trace_refs": [
+        "2026-04-04_00-55_runtime-harness-skills-computer-use.md",
+        "2026-04-05_22-50_v08-implementation.md"
+      ],
+      "children": [
+        "godot_agent/tools/base.py",
+        "godot_agent/tools/registry.py",
+        "godot_agent/tools/file_ops.py",
+        "godot_agent/tools/search.py",
+        "godot_agent/tools/shell.py",
+        "godot_agent/tools/git.py",
+        "godot_agent/tools/list_dir.py",
+        "godot_agent/tools/godot_cli.py",
+        "godot_agent/tools/scene_tools.py",
+        "godot_agent/tools/script_tools.py",
+        "godot_agent/tools/analysis_tools.py",
+        "godot_agent/tools/editor_bridge.py",
+        "godot_agent/tools/memory_tool.py",
+        "godot_agent/tools/image_gen.py",
+        "godot_agent/tools/screenshot.py",
+        "godot_agent/tools/sprite_pipeline.py",
+        "godot_agent/tools/sprite_qa.py",
+        "godot_agent/tools/runtime_harness.py",
+        "godot_agent/tools/web_search.py",
+        "godot_agent/tools/vision_analysis.py",
+        "godot_agent/tools/vision_scoring.py"
+      ]
+    },
+    "llm": {
+      "path": "godot_agent/llm/",
+      "type": "module",
+      "description": "LLM client layer with provider adapters (Anthropic, OpenAI) + dual-path backend support + vision encoding",
+      "last_modified": "2026-04-05",
+      "trace_refs": [
+        "2026-04-04_00-55_runtime-harness-skills-computer-use.md",
+        "2026-04-05_22-50_v08-implementation.md"
+      ],
+      "children": [
+        "godot_agent/llm/client.py",
+        "godot_agent/llm/types.py",
+        "godot_agent/llm/streaming.py",
+        "godot_agent/llm/vision.py",
+        "godot_agent/llm/adapters/base.py",
+        "godot_agent/llm/adapters/anthropic.py",
+        "godot_agent/llm/adapters/openai.py"
+      ]
+    },
+    "godot": {
+      "path": "godot_agent/godot/",
+      "type": "module",
+      "description": "Godot engine integration (parsers, validators, linter, collision planner)",
+      "children": [
+        "godot_agent/godot/project.py",
+        "godot_agent/godot/scene_parser.py",
+        "godot_agent/godot/scene_writer.py",
+        "godot_agent/godot/resource_validator.py",
+        "godot_agent/godot/tscn_validator.py",
+        "godot_agent/godot/gdscript_linter.py",
+        "godot_agent/godot/collision_planner.py",
+        "godot_agent/godot/consistency_checker.py",
+        "godot_agent/godot/dependency_graph.py",
+        "godot_agent/godot/pattern_advisor.py",
+        "godot_agent/godot/impact_analysis.py"
+      ]
+    },
+    "runtime": {
+      "path": "godot_agent/runtime/",
+      "type": "module",
+      "description": "Agent runtime engine (session, config, modes, quality gates, reviewers, validation suite, visual regression, live bridge, playtest harness)",
+      "last_modified": "2026-04-05",
+      "trace_refs": [
+        "2026-04-04_00-55_runtime-harness-skills-computer-use.md",
+        "2026-04-05_22-50_v08-implementation.md"
+      ],
+      "children": [
+        "godot_agent/runtime/engine.py",
+        "godot_agent/runtime/session.py",
+        "godot_agent/runtime/config.py",
+        "godot_agent/runtime/modes.py",
+        "godot_agent/runtime/providers.py",
+        "godot_agent/runtime/events.py",
+        "godot_agent/runtime/context_manager.py",
+        "godot_agent/runtime/runtime_bridge.py",
+        "godot_agent/runtime/error_loop.py",
+        "godot_agent/runtime/quality_gate.py",
+        "godot_agent/runtime/design_memory.py",
+        "godot_agent/runtime/reviewer.py",
+        "godot_agent/runtime/gameplay_reviewer.py",
+        "godot_agent/runtime/playtest_harness.py",
+        "godot_agent/runtime/visual_regression.py",
+        "godot_agent/runtime/validation_checks.py",
+        "godot_agent/runtime/live_client.py",
+        "godot_agent/runtime/intent_resolver.py",
+        "godot_agent/runtime/auth.py",
+        "godot_agent/runtime/oauth.py"
+      ]
+    },
+    "prompts": {
+      "path": "godot_agent/prompts/",
+      "type": "module",
+      "description": "Prompt assembly, skill library, skill selector, vision templates",
+      "last_modified": "2026-04-05",
+      "trace_refs": [
+        "2026-04-04_00-55_runtime-harness-skills-computer-use.md",
+        "2026-04-05_22-50_v08-implementation.md"
+      ],
+      "children": [
+        "godot_agent/prompts/system.py",
+        "godot_agent/prompts/assembler.py",
+        "godot_agent/prompts/knowledge_selector.py",
+        "godot_agent/prompts/skill_selector.py",
+        "godot_agent/prompts/skill_library.py",
+        "godot_agent/prompts/godot_playbook.py",
+        "godot_agent/prompts/build_discipline.py",
+        "godot_agent/prompts/image_templates.py",
+        "godot_agent/prompts/vision_templates.py"
+      ]
+    },
+    "addons": {
+      "path": "godot_agent/addons/",
+      "type": "module",
+      "description": "Godot EditorPlugin addons (GodCodeBridge TCP JSON-RPC server)",
+      "last_modified": "2026-04-05",
+      "trace_refs": ["2026-04-05_22-50_v08-implementation.md"],
+      "children": [
+        "godot_agent/addons/god_code_bridge/god_code_bridge.gd",
+        "godot_agent/addons/god_code_bridge/plugin.cfg"
+      ]
+    },
+    "security": {
+      "path": "godot_agent/security/",
+      "type": "module",
+      "description": "Security layer (path protection, tool pipeline, policies, classifier)",
+      "children": [
+        "godot_agent/security/protected_paths.py",
+        "godot_agent/security/hooks.py",
+        "godot_agent/security/policies.py",
+        "godot_agent/security/tool_pipeline.py",
+        "godot_agent/security/classifier.py"
+      ]
+    },
+    "tui": {
+      "path": "godot_agent/tui/",
+      "type": "module",
+      "description": "Terminal UI (Rich display, input handling, skills panel)",
+      "last_modified": "2026-04-04",
+      "trace_refs": ["2026-04-04_00-55_runtime-harness-skills-computer-use.md"]
+    },
+    "agents": {
+      "path": "godot_agent/agents/",
+      "type": "module",
+      "description": "Multi-agent dispatcher and configs"
+    },
+    "testing": {
+      "path": "godot_agent/testing/",
+      "type": "module",
+      "description": "Scenario runner for automated testing",
+      "last_modified": "2026-04-04",
+      "trace_refs": ["2026-04-04_00-55_runtime-harness-skills-computer-use.md"]
+    }
+  },
+  "relationships": {
+    "cli -> prompts": "skill_selector imports for /skills command",
+    "cli -> tools": "engine_wiring registers all tools including vision tools",
+    "cli -> runtime": "engine_wiring builds engine, passes ValidationSuite config",
+    "runtime -> llm": "engine uses LLMClient dual-path (direct + backend)",
+    "runtime -> tools": "engine calls vision tools in RUN_VISUAL_ITERATION phase",
+    "runtime -> validation_checks": "quality_gate and reviewer share ValidationSuite cache",
+    "runtime -> live_client": "engine calls _try_live_bridge in PREPARE_CONTEXT",
+    "llm -> runtime": "adapters use providers.supports_computer_use()",
+    "prompts -> tools": "skill_selector narrows tool scope per active skill",
+    "addons -> runtime": "GodCodeBridge.gd serves data to LiveRuntimeClient via TCP",
+    "tools/vision -> prompts": "vision_analysis and vision_scoring use vision_templates"
+  }
+}
