@@ -1,3 +1,9 @@
+import json
+from unittest.mock import AsyncMock, MagicMock
+
+import httpx
+import pytest
+
 from godot_agent.llm.client import LLMClient, LLMConfig, Message, ToolCall, TokenUsage
 
 
@@ -164,6 +170,71 @@ class TestLLMClient:
         config = LLMConfig(api_key="sk-test", backend_url="https://api.god-code.dev/")
         client = LLMClient(config)
         assert client._backend_url == "https://api.god-code.dev"
+
+    def test_backend_api_key_default_empty(self):
+        config = LLMConfig(api_key="sk-test", backend_url="https://api.god-code.dev")
+        assert config.backend_api_key == ""
+
+    @pytest.mark.asyncio
+    async def test_backend_sends_bearer_when_api_key_set(self):
+        """When backend_api_key is set, _chat_via_backend sends it as Bearer token."""
+        config = LLMConfig(
+            api_key="sk-test",
+            backend_url="https://api.god-code.dev",
+            backend_api_key="gc-platform-key-789",
+        )
+        client = LLMClient(config)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+        client._http.post = AsyncMock(return_value=mock_response)
+
+        resp = await client._chat_via_backend(
+            [Message.user("hello")],
+            None,
+            {"intent": "test"},
+        )
+        assert resp.message.content == "OK"
+
+        call_kwargs = client._http.post.call_args
+        headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers", {})
+        assert headers["Authorization"] == "Bearer gc-platform-key-789"
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_backend_no_auth_header_when_api_key_empty(self):
+        """When backend_api_key is empty, no Authorization header is sent."""
+        config = LLMConfig(
+            api_key="sk-test",
+            backend_url="https://api.god-code.dev",
+            backend_api_key="",
+        )
+        client = LLMClient(config)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+        client._http.post = AsyncMock(return_value=mock_response)
+
+        await client._chat_via_backend(
+            [Message.user("hello")],
+            None,
+            {"intent": "test"},
+        )
+
+        call_kwargs = client._http.post.call_args
+        headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers", {})
+        assert "Authorization" not in headers
+        await client.close()
 
     def test_build_computer_use_request(self):
         client = LLMClient(

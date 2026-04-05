@@ -123,10 +123,14 @@ class LLMClient:
         if self.config.backend_provider_keys:
             body["provider_keys"] = self.config.backend_provider_keys
 
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self.config.backend_api_key:
+            headers["Authorization"] = f"Bearer {self.config.backend_api_key}"
+
         resp = await self._http.post(
             f"{self._backend_url}/v1/orchestrate",
             json=body,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         resp.raise_for_status()
         data = resp.json()

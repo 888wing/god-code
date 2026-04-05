@@ -29,10 +29,27 @@ class TestBackendConfig:
         """Backend config fields default to empty/balanced."""
         cfg = AgentConfig()
         assert cfg.backend_url == ""
+        assert cfg.backend_api_key == ""
         assert cfg.backend_cost_preference == "balanced"
         assert cfg.backend_force_provider == ""
         assert cfg.backend_force_model == ""
         assert cfg.backend_provider_keys == {}
+
+    def test_backend_api_key_default_empty(self):
+        """backend_api_key defaults to empty string."""
+        cfg = AgentConfig()
+        assert cfg.backend_api_key == ""
+
+    def test_backend_api_key_from_kwargs(self):
+        """backend_api_key can be set via constructor."""
+        cfg = AgentConfig(backend_api_key="gc-test-key-123")
+        assert cfg.backend_api_key == "gc-test-key-123"
+
+    def test_backend_api_key_from_env(self, tmp_path, monkeypatch):
+        """backend_api_key can be loaded from environment variable."""
+        monkeypatch.setenv("GODOT_AGENT_BACKEND_API_KEY", "gc-env-key-456")
+        config = load_config(tmp_path / "nonexistent.json")
+        assert config.backend_api_key == "gc-env-key-456"
 
     def test_backend_config_from_kwargs(self):
         """Backend config fields can be set via constructor."""

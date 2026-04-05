@@ -135,6 +135,7 @@ class LLMConfig:
     computer_use_display_width: int = 1024
     computer_use_display_height: int = 768
     backend_url: str = ""
+    backend_api_key: str = ""
     backend_provider_keys: dict[str, str] = field(default_factory=dict)
 
 

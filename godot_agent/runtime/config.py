@@ -51,6 +51,7 @@ class AgentConfig(BaseModel):
     backend_cost_preference: str = "balanced"  # economy | balanced | quality
     backend_force_provider: str = ""
     backend_force_model: str = ""
+    backend_api_key: str = ""                   # Platform API key (Bearer token for backend auth)
     backend_provider_keys: dict[str, str] = Field(default_factory=dict)
 
     # Paths
@@ -75,6 +76,8 @@ def load_config(path: Path | None = None, use_codex: bool = False) -> AgentConfi
         "GODOT_AGENT_COMPUTER_USE_ENVIRONMENT": "computer_use_environment",
         "GODOT_AGENT_COMPUTER_USE_WIDTH": "computer_use_display_width",
         "GODOT_AGENT_COMPUTER_USE_HEIGHT": "computer_use_display_height",
+        "GODOT_AGENT_BACKEND_URL": "backend_url",
+        "GODOT_AGENT_BACKEND_API_KEY": "backend_api_key",
     }
     for env_key, field_name in env_map.items():
         val = os.environ.get(env_key)

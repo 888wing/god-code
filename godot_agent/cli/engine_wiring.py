@@ -246,6 +246,9 @@ def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
         computer_use_environment=config.computer_use_environment,
         computer_use_display_width=config.computer_use_display_width,
         computer_use_display_height=config.computer_use_display_height,
+        backend_url=config.backend_url,
+        backend_api_key=config.backend_api_key,
+        backend_provider_keys=config.backend_provider_keys,
     )
     client = LLMClient(llm_config)
     registry = build_registry()
