@@ -6,8 +6,10 @@
 
 **god-code** — a Python CLI agent that understands GDScript, .tscn scenes, collision layers, and Godot architecture patterns. Multi-provider LLM support with 41 Godot-specific tools, AI sprite generation, vision-driven UI iteration, live Godot runtime bridge, and incremental build-and-verify discipline.
 
+**Website**: https://godcode.dev (Cloudflare Pages)
 **GitHub**: https://github.com/888wing/god-code
 **Backend API**: https://github.com/888wing/god-code-api (Cloudflare Workers)
+**Landing Page**: https://github.com/888wing/god-code-site (Astro + Three.js)
 **License**: GPL-3.0
 
 ## Tech Stack
@@ -132,13 +134,6 @@ godot_agent/
     └── input_handler.py               # prompt_toolkit input + autocomplete
 ```
 
-## Two-Repo Architecture
-
-| Repo | Purpose | Stack | Deploy |
-|------|---------|-------|--------|
-| **god-code** | Python CLI agent | Python 3.12+, pytest | `pipx install` |
-| **god-code-api** | Backend orchestration | TypeScript, Vitest, CF Workers/D1/KV | `npx wrangler deploy` |
-
 **god-code-api** provides:
 - LLM request routing (OpenAI, Anthropic, Gemini, xAI)
 - Gemini native vision adapter (generateContent + inline_data)
@@ -257,31 +252,77 @@ cd ~/projects/god-code-api
 npx vitest run                                # Full suite (134 tests)
 ```
 
-## Release Process
+## CRITICAL: Release Process (3-repo sync)
+
+Every release MUST update all 3 repos. Missing any step will cause version mismatch, stale landing page, or broken update notifications.
 
 ```bash
-# 1. Bump version — single source of truth
+# ══════════════════════════════════════════════════════════════
+# STEP 1: god-code — bump version (single source of truth)
+# ══════════════════════════════════════════════════════════════
 cd ~/projects/god-code
 # Edit pyproject.toml: version = "X.Y.Z"
-# _VERSION in commands.py reads from importlib.metadata automatically
-
-# 2. Commit, push
 git commit -am "release: vX.Y.Z"
 git push
 
-# 3. Update backend version endpoint
+# ══════════════════════════════════════════════════════════════
+# STEP 2: god-code-api — update version endpoint + deploy
+# ══════════════════════════════════════════════════════════════
 cd ~/projects/god-code-api
 # Edit wrangler.toml: LATEST_VERSION = "X.Y.Z"
 # Optional: UPDATE_MESSAGE = "vX.Y: new feature summary"
 npx wrangler deploy
+git commit -am "chore: update LATEST_VERSION to X.Y.Z"
+git push
 
-# 4. Users update via:
-pipx upgrade god-code
+# ══════════════════════════════════════════════════════════════
+# STEP 3: god-code-site — sync landing page stats + deploy
+# ══════════════════════════════════════════════════════════════
+cd ~/projects/god-code-site
+# Update in src/pages/index.astro:
+#   - hero-badge version: "vX.Y"
+#   - stats section: test count, tool count, lines of code
+#   - any new features in feature grid or terminal demo
+#   - pricing changes if applicable
+npx astro build && npx wrangler pages deploy dist --project-name god-code-site
+git commit -am "chore: sync landing page for vX.Y.Z"
+git push
 ```
+
+**Why all 3 must sync:**
+- `god-code` pyproject.toml is the version source → CLI reads it via importlib.metadata
+- `god-code-api` wrangler.toml LATEST_VERSION → CLI checks on startup, shows update prompt
+- `god-code-site` landing page → public-facing, must reflect current version/stats/features
 
 **Version sync**: `_VERSION` in `commands.py` reads from `importlib.metadata.version("god-code")` which reads `pyproject.toml`. No hardcoded version strings.
 
 **Update notifications**: CLI checks `GET /v1/version` on startup. Backend returns `latest`, `min_supported`, `update_url`, `message`. Outdated users see yellow prompt; unsupported users see red warning.
+
+## Three-Repo Architecture
+
+| Repo | Path | Domain | Stack | Deploy |
+|------|------|--------|-------|--------|
+| **god-code** | ~/projects/god-code | - | Python 3.12+, pytest | `pipx install` |
+| **god-code-api** | ~/projects/god-code-api | god-code-api.nano122090.workers.dev | TS, Vitest, CF Workers/D1/KV | `npx wrangler deploy` |
+| **god-code-site** | ~/projects/god-code-site | godcode.dev | Astro, Three.js, CF Pages | `npx wrangler pages deploy dist` |
+
+### god-code-site (Landing Page)
+
+Astro static site with Three.js ASCII particle animation. Deployed to Cloudflare Pages at **godcode.dev**.
+
+Key features:
+- Three.js hero: ASCII characters form "GOD CODE" text → scatter → drift → reform (16s loop)
+- Lucide icons throughout (inline SVG, no runtime deps)
+- Typewriter terminal demo (IntersectionObserver-triggered)
+- Waitlist form → `POST /v1/waitlist` (stored in CF KV)
+- Pricing tiers: Free (BYOK) / Starter $9 / Pro $29 / Team $79
+
+**Sections that must update on release:**
+- `hero-badge`: version number
+- `stats-row`: test count, tool count, line count
+- Feature cards: if new capabilities added
+- Terminal demo: if new tools showcased
+- Pricing features: if tier changes
 
 ## Backend API Endpoints
 
@@ -293,3 +334,5 @@ pipx upgrade god-code
 | `/v1/orchestrate` | POST | BYOK or `gc_live_*` | LLM request routing |
 | `/v1/admin/keys` | POST | `X-Admin-Secret` | Create platform API key |
 | `/v1/usage` | GET | `Bearer gc_live_*` | Query usage and quota |
+| `/v1/waitlist` | POST | None | Collect email signups (stored in KV) |
+| `/v1/waitlist` | GET | `X-Admin-Secret` | List waitlist entries |
