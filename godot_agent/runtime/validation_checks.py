@@ -48,15 +48,17 @@ class ValidationSuite:
     def _check_names(self) -> list[str]:
         """Registry of all check categories to run."""
         return [
-            "file_exists",
-            "gdscript_lint",
-            "tscn_validate",
-            "scene_resources",
-            "ui_layout",
-            "audio_nodes",
-            "project_consistency",
-            "dependency_graph",
-            "pattern_advisor",
+            "change-impact",
+            "file-exists",
+            "gdscript-lint",
+            "tscn-validate",
+            "scene-resources",
+            "ui-layout",
+            "audio-nodes",
+            "project-consistency",
+            "dependency-graph",
+            "pattern-advisor",
+            "godot-validate",
         ]
 
     async def _run_check(self, name: str) -> CheckResult:
