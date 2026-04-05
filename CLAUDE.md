@@ -123,6 +123,12 @@ Every tool inherits `BaseTool`. Supports `strict` mode for GPT-5+ structured out
 - Anthropic: `thinking` budget for reasoning models
 - Gemini: `reasoning_effort` parameter
 
+### Vision Model Capabilities
+- **GPT-5.4**: Native vision support. Accepts `image_url` in chat completions messages. Use for game screenshot analysis, UI iteration, visual QA. This is the PRIMARY vision model — do NOT fall back to gpt-4o.
+- **Gemini 2.5 Flash**: Vision via OpenAI-compatible endpoint. Fast and cheap. Use for quality scoring and bulk screenshot analysis.
+- **GPT-4o**: DEPRECATED for god-code. Use gpt-5.4 instead — it has superior vision AND tool-calling.
+- Vision image detail: use `"detail": "high"` for game screenshots (pixel art needs full resolution).
+
 ### Engine Loop Phases
 ```
 PREPARE_CONTEXT → CALL_MODEL → EXECUTE_TOOLS → RUN_QUALITY_GATE → RUN_REVIEWER → NEXT_ROUND → DONE
