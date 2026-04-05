@@ -74,22 +74,27 @@ class GenerateSpriteTool(BaseTool):
             )
             log.info("Image prompt: %s", prompt[:100])
 
-            # Call OpenAI image generation API
-            from godot_agent.tools.file_ops import _project_root
+            # Call image generation API via LLM client or direct fallback
             api_key = ""
-            # Read API key from config
-            config_path = Path.home() / ".config" / "god-code" / "config.json"
-            if config_path.exists():
-                import json
-                cfg = json.loads(config_path.read_text())
-                api_key = cfg.get("api_key", "")
+            base_url = "https://api.openai.com/v1"
+            ctx = getattr(self, "_execution_context", None)
+            llm_client = getattr(ctx, "llm_client", None) if ctx else None
+            if llm_client:
+                api_key = llm_client.config.api_key
+                base_url = llm_client.config.base_url or base_url
+            if not api_key:
+                config_path = Path.home() / ".config" / "god-code" / "config.json"
+                if config_path.exists():
+                    import json
+                    cfg = json.loads(config_path.read_text())
+                    api_key = cfg.get("api_key", "")
 
             if not api_key:
                 return ToolResult(error="No API key configured for image generation")
 
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
-                    "https://api.openai.com/v1/images/generations",
+                    f"{base_url}/images/generations",
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",

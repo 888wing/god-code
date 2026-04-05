@@ -192,6 +192,10 @@ class LLMClient:
         call_id: str | None = None,
         detail: str = "original",
     ) -> ComputerUseResponse:
+        # Computer use currently only works via direct provider API (Anthropic/OpenAI responses API).
+        # Backend routing for computer_use is not yet supported — log a warning if backend is configured.
+        if self._use_backend:
+            log.warning("computer_use() does not route through backend — using direct provider API")
         body = self.adapter.build_computer_use_request(
             self.config,
             prompt=prompt,
@@ -205,6 +209,15 @@ class LLMClient:
             headers=self._build_headers(),
             json=body,
         )
+        if resp.status_code >= 400:
+            detail_msg = ""
+            try:
+                err_body = resp.json()
+                err_obj = err_body.get("error", {})
+                detail_msg = err_obj.get("message", "") if isinstance(err_obj, dict) else str(err_obj)
+            except Exception:
+                detail_msg = resp.text[:200]
+            log.error("computer_use API error %d: %s", resp.status_code, detail_msg)
         resp.raise_for_status()
         return self.adapter.parse_computer_use_response(resp.json())
 

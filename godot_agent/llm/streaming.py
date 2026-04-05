@@ -80,6 +80,16 @@ async def _consume_sse_stream(
     usage = TokenUsage()
 
     async with client._http.stream("POST", url, headers=headers, json=body) as resp:
+        if resp.status_code >= 400:
+            # Read error body before raise_for_status for useful error messages
+            error_text = ""
+            async for chunk in resp.aiter_bytes():
+                error_text += chunk.decode("utf-8", errors="replace")
+                if len(error_text) > 500:
+                    break
+            import logging
+            log = logging.getLogger(__name__)
+            log.error("Stream request failed %d: %s", resp.status_code, error_text[:300])
         resp.raise_for_status()
         async for line in resp.aiter_lines():
             if not line.startswith("data: "):

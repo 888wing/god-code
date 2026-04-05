@@ -181,6 +181,7 @@ class ConversationEngine:
             allowed_tools=self.allowed_tools,
             changeset=self.changeset,
             emit_event=lambda kind, message, data: self._emit_event(kind, message, **data),
+            llm_client=self.client,
         )
 
     async def _try_live_bridge(self) -> None:

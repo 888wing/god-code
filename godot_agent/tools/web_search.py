@@ -35,11 +35,21 @@ class WebSearchTool(BaseTool):
         try:
             from pathlib import Path
             import json
-            config_path = Path.home() / ".config" / "god-code" / "config.json"
+
             api_key = ""
-            if config_path.exists():
-                cfg = json.loads(config_path.read_text())
-                api_key = cfg.get("api_key", "")
+            base_url = "https://api.openai.com/v1"
+            model = "gpt-5.4"
+            ctx = getattr(self, "_execution_context", None)
+            llm_client = getattr(ctx, "llm_client", None) if ctx else None
+            if llm_client:
+                api_key = llm_client.config.api_key
+                base_url = llm_client.config.base_url or base_url
+                model = llm_client.config.model or model
+            if not api_key:
+                config_path = Path.home() / ".config" / "god-code" / "config.json"
+                if config_path.exists():
+                    cfg = json.loads(config_path.read_text())
+                    api_key = cfg.get("api_key", "")
 
             if not api_key:
                 return ToolResult(error="No API key for web search")
@@ -51,13 +61,13 @@ class WebSearchTool(BaseTool):
             # Use OpenAI's web search via responses API
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
-                    "https://api.openai.com/v1/responses",
+                    f"{base_url}/responses",
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "gpt-5.4",
+                        "model": model,
                         "tools": [{"type": "web_search_preview"}],
                         "input": f"Search for: {query}\n\nReturn the top 5 most relevant results with title, URL, and a brief summary of each.",
                     },

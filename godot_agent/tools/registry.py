@@ -29,6 +29,7 @@ class ToolRegistry:
         allowed_tools: set[str] | None = None,
         changeset=None,
         emit_event=None,
+        llm_client=None,
     ) -> None:
         if mode is not None:
             self.execution_context.mode = mode
@@ -41,6 +42,8 @@ class ToolRegistry:
             self.execution_context.changeset = changeset
         if emit_event is not None:
             self.execution_context.emit_event = emit_event
+        if llm_client is not None:
+            self.execution_context.llm_client = llm_client
 
     def get(self, name: str) -> BaseTool | None:
         return self._tools.get(name)

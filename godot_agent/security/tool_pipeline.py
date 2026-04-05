@@ -56,6 +56,9 @@ class ToolExecutionPipeline:
                 },
             )
 
+        # Inject execution context onto tool for tools that need API access
+        tool._execution_context = context
+
         try:
             result = await tool.execute(final_input)
         except Exception as exc:

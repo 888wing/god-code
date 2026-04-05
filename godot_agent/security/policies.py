@@ -24,6 +24,7 @@ class ToolExecutionContext:
     changeset: Any = None
     protected_paths: ProtectedPathSet = field(default_factory=ProtectedPathSet)
     emit_event: EventCallback | None = None
+    llm_client: Any = None  # LLMClient instance for tools that need API access
 
     def refresh_protected_paths(self) -> None:
         self.protected_paths = discover_protected_paths(self.project_root)
