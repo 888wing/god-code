@@ -159,7 +159,14 @@ _PROVIDERS = {
 }
 
 
-_VERSION = "0.8.0"
+def _get_version() -> str:
+    from importlib.metadata import version
+    try:
+        return version("god-code")
+    except Exception:
+        return "dev"
+
+_VERSION = _get_version()
 
 
 def _is_configured() -> bool:
