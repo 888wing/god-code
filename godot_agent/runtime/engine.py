@@ -60,6 +60,7 @@ class LoopPhase(enum.Enum):
     RUN_QUALITY_GATE = "run_quality_gate"
     RUN_REVIEWER = "run_reviewer"
     RUN_PLAYTEST_ANALYST = "run_playtest_analyst"
+    RUN_VISUAL_ITERATION = "run_visual_iteration"
     NEXT_ROUND = "next_round"
     DONE = "done"
 
@@ -785,6 +786,15 @@ class ConversationEngine:
 
             if state.phase is LoopPhase.RUN_PLAYTEST_ANALYST:
                 await self._run_playtest_analyst_for_round(state.modified_files)
+                state.phase = LoopPhase.RUN_VISUAL_ITERATION
+                continue
+
+            if state.phase is LoopPhase.RUN_VISUAL_ITERATION:
+                # Visual iteration sub-loop placeholder.
+                # When fully wired, this phase will:
+                #   screenshot -> analyze_screenshot -> apply changes ->
+                #   re-screenshot -> score_screenshot -> check threshold
+                # For now, transition directly to NEXT_ROUND.
                 state.phase = LoopPhase.NEXT_ROUND
                 continue
 

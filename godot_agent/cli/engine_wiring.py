@@ -74,6 +74,8 @@ from godot_agent.tools.search import GlobTool, GrepTool
 from godot_agent.tools.shell import RunShellTool
 from godot_agent.tools.memory_tool import ReadDesignMemoryTool, UpdateDesignMemoryTool
 from godot_agent.tools.script_tools import EditScriptTool, LintScriptTool, ReadScriptTool
+from godot_agent.tools.vision_analysis import AnalyzeScreenshotTool
+from godot_agent.tools.vision_scoring import ScoreScreenshotTool
 
 
 # ── config persistence ─────────────────────────────────────────
@@ -219,6 +221,7 @@ def build_registry() -> ToolRegistry:
         CompareBaselineTool, ReportFailureTool,
         SliceSpriteSheetTool, ValidateSpriteImportsTool,
         GenerateSpriteTool, WebSearchTool,
+        AnalyzeScreenshotTool, ScoreScreenshotTool,
     ]:
         registry.register(tool_cls())
     return registry

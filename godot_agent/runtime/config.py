@@ -27,6 +27,7 @@ class AgentConfig(BaseModel):
     auto_validate: bool = True
     auto_commit: bool = False
     screenshot_max_iterations: int = 5
+    max_visual_iterations: int = 3
 
     # UX
     language: str = "en"  # en, zh-TW, ja

@@ -257,3 +257,40 @@ class TestConversationEngine:
         assert "read_scene" in tool_names
         assert "write_scene_property" in tool_names
         assert "run_shell" not in tool_names
+
+
+def test_loop_phase_includes_visual_iteration():
+    from godot_agent.runtime.engine import LoopPhase
+    assert hasattr(LoopPhase, "RUN_VISUAL_ITERATION")
+
+
+def test_visual_iteration_config_defaults():
+    """max_visual_iterations defaults to 3."""
+    from godot_agent.runtime.config import AgentConfig
+    cfg = AgentConfig()
+    assert cfg.max_visual_iterations == 3
+
+
+def test_vision_tools_in_apply_mode():
+    """Vision tools are in the apply mode allowlist."""
+    from godot_agent.runtime.modes import allowed_tools_for_mode
+    tools = allowed_tools_for_mode("apply")
+    assert "analyze_screenshot" in tools
+    assert "score_screenshot" in tools
+
+
+def test_vision_tools_in_fix_mode():
+    """Vision tools are in the fix mode allowlist."""
+    from godot_agent.runtime.modes import allowed_tools_for_mode
+    tools = allowed_tools_for_mode("fix")
+    assert "analyze_screenshot" in tools
+    assert "score_screenshot" in tools
+
+
+def test_vision_tools_in_registry():
+    """Vision tools are registered in the tool registry."""
+    from godot_agent.cli.engine_wiring import build_registry
+    registry = build_registry()
+    tool_names = {t.name for t in registry.list_tools()}
+    assert "analyze_screenshot" in tool_names
+    assert "score_screenshot" in tool_names
