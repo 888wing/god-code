@@ -264,7 +264,8 @@ def load_design_memory(project_root: Path) -> DesignMemory:
         gameplay_intent = _intent_from_data(data.get("gameplay_intent"))
         asset_spec = _asset_spec_from_data(data.get("asset_spec"))
         polish_profile = _polish_profile_from_data(data.get("polish_profile"))
-        payload = {key: value for key, value in data.items() if key not in {"gameplay_intent", "asset_spec", "polish_profile"}}
+        known_fields = {f.name for f in DesignMemory.__dataclass_fields__.values()}
+        payload = {key: value for key, value in data.items() if key in known_fields and key not in {"gameplay_intent", "asset_spec", "polish_profile"}}
         payload["gameplay_intent"] = gameplay_intent
         payload["asset_spec"] = asset_spec
         payload["polish_profile"] = polish_profile
