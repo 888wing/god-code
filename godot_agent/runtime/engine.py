@@ -24,7 +24,8 @@ from godot_agent.runtime.quality_gate import (
     format_quality_gate_report,
     run_quality_gate,
 )
-from godot_agent.runtime.runtime_bridge import RuntimeSnapshot, get_runtime_snapshot
+from godot_agent.runtime.live_client import LiveRuntimeClient
+from godot_agent.runtime.runtime_bridge import RuntimeSnapshot, get_runtime_snapshot, update_runtime_snapshot
 from godot_agent.runtime.reviewer import ReviewReport, format_review_report, review_changes
 from godot_agent.runtime.validation_checks import ValidationSuite
 from godot_agent.tools.registry import ToolRegistry
@@ -165,6 +166,7 @@ class ConversationEngine:
         self.on_commit_suggest: Callable[[], None] | None = None
         self.on_event: EventCallback | None = None
         self._last_intent_signature: tuple[str, str, bool, tuple[str, ...]] | None = None
+        self._live_client: LiveRuntimeClient | None = None
         self.refresh_intent_profile()
         self._sync_registry_context()
 
@@ -180,6 +182,25 @@ class ConversationEngine:
             changeset=self.changeset,
             emit_event=lambda kind, message, data: self._emit_event(kind, message, **data),
         )
+
+    async def _try_live_bridge(self) -> None:
+        """Attempt to connect to a running Godot instance via the live bridge.
+
+        If Godot is reachable, fetches a live runtime snapshot and stores it as
+        the current global snapshot.  If not reachable, silently continues.
+        This method never raises — all exceptions are swallowed so the engine
+        loop is never blocked by bridge failures.
+        """
+        try:
+            if self._live_client is None:
+                self._live_client = LiveRuntimeClient(timeout=0.5)
+            connected = await self._live_client.connect()
+            if connected:
+                snapshot = await self._live_client.build_snapshot()
+                update_runtime_snapshot(snapshot)
+                await self._live_client.disconnect()
+        except Exception:
+            pass
 
     def _base_tool_scope(self) -> set[str] | None:
         if self.base_allowed_tools is not None:
@@ -726,6 +747,7 @@ class ConversationEngine:
                 return "Tool call limit reached. Please simplify the request."
 
             if state.phase is LoopPhase.PREPARE_CONTEXT:
+                await self._try_live_bridge()
                 await self._maybe_compact()
                 self._refresh_tool_scope()
                 self._refresh_system_prompt()

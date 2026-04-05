@@ -294,3 +294,114 @@ def test_vision_tools_in_registry():
     tool_names = {t.name for t in registry.list_tools()}
     assert "analyze_screenshot" in tool_names
     assert "score_screenshot" in tool_names
+
+
+def test_engine_has_try_live_bridge():
+    from godot_agent.runtime.engine import ConversationEngine
+    assert hasattr(ConversationEngine, "_try_live_bridge")
+
+
+class TestTryLiveBridge:
+    @pytest.mark.asyncio
+    async def test_try_live_bridge_updates_snapshot_on_success(self):
+        """When Godot is reachable, _try_live_bridge updates the global snapshot."""
+        from unittest.mock import patch, AsyncMock as AM
+        from godot_agent.runtime.runtime_bridge import RuntimeSnapshot, get_runtime_snapshot, clear_runtime_snapshot
+
+        mock_client = AsyncMock(spec=LLMClient)
+        registry = ToolRegistry()
+        engine = ConversationEngine(client=mock_client, registry=registry, system_prompt="test")
+
+        fake_snapshot = RuntimeSnapshot(
+            source="live_editor",
+            evidence_level="high",
+            bridge_connected=True,
+            captured_at="2026-01-01T00:00:00Z",
+            nodes=[],
+        )
+
+        with patch("godot_agent.runtime.engine.LiveRuntimeClient") as MockLRC:
+            mock_instance = AM()
+            mock_instance.connect = AM(return_value=True)
+            mock_instance.build_snapshot = AM(return_value=fake_snapshot)
+            mock_instance.disconnect = AM()
+            MockLRC.return_value = mock_instance
+
+            await engine._try_live_bridge()
+
+            mock_instance.connect.assert_awaited_once()
+            mock_instance.build_snapshot.assert_awaited_once()
+            mock_instance.disconnect.assert_awaited_once()
+
+        snap = get_runtime_snapshot()
+        assert snap is not None
+        assert snap.bridge_connected is True
+        assert snap.source == "live_editor"
+        clear_runtime_snapshot()
+
+    @pytest.mark.asyncio
+    async def test_try_live_bridge_silent_on_failure(self):
+        """When Godot is unreachable, _try_live_bridge silently continues."""
+        from unittest.mock import patch, AsyncMock as AM
+        from godot_agent.runtime.runtime_bridge import get_runtime_snapshot, clear_runtime_snapshot
+
+        mock_client = AsyncMock(spec=LLMClient)
+        registry = ToolRegistry()
+        engine = ConversationEngine(client=mock_client, registry=registry, system_prompt="test")
+
+        with patch("godot_agent.runtime.engine.LiveRuntimeClient") as MockLRC:
+            mock_instance = AM()
+            mock_instance.connect = AM(return_value=False)
+            MockLRC.return_value = mock_instance
+
+            # Should not raise
+            await engine._try_live_bridge()
+
+            mock_instance.connect.assert_awaited_once()
+            mock_instance.build_snapshot.assert_not_awaited()
+
+        clear_runtime_snapshot()
+
+    @pytest.mark.asyncio
+    async def test_try_live_bridge_silent_on_exception(self):
+        """Even if the bridge throws, the engine never crashes."""
+        from unittest.mock import patch, AsyncMock as AM
+        from godot_agent.runtime.runtime_bridge import clear_runtime_snapshot
+
+        mock_client = AsyncMock(spec=LLMClient)
+        registry = ToolRegistry()
+        engine = ConversationEngine(client=mock_client, registry=registry, system_prompt="test")
+
+        with patch("godot_agent.runtime.engine.LiveRuntimeClient") as MockLRC:
+            mock_instance = AM()
+            mock_instance.connect = AM(side_effect=OSError("boom"))
+            MockLRC.return_value = mock_instance
+
+            # Should not raise
+            await engine._try_live_bridge()
+
+        clear_runtime_snapshot()
+
+    @pytest.mark.asyncio
+    async def test_try_live_bridge_reuses_client(self):
+        """Subsequent calls reuse the same LiveRuntimeClient instance."""
+        from unittest.mock import patch, AsyncMock as AM
+        from godot_agent.runtime.runtime_bridge import clear_runtime_snapshot
+
+        mock_client = AsyncMock(spec=LLMClient)
+        registry = ToolRegistry()
+        engine = ConversationEngine(client=mock_client, registry=registry, system_prompt="test")
+
+        with patch("godot_agent.runtime.engine.LiveRuntimeClient") as MockLRC:
+            mock_instance = AM()
+            mock_instance.connect = AM(return_value=False)
+            MockLRC.return_value = mock_instance
+
+            await engine._try_live_bridge()
+            await engine._try_live_bridge()
+
+            # Constructor called once, connect called twice
+            assert MockLRC.call_count == 1
+            assert mock_instance.connect.await_count == 2
+
+        clear_runtime_snapshot()
