@@ -1,305 +1,314 @@
-# Interactive UX Redesign — Proactive Agent, Structured Plans, Autonomous Mode
+# Interactive UX Redesign — Smart Agent Flow
 
 **Date**: 2026-04-06
-**Status**: Design
-**Goal**: Make god-code feel like an intelligent collaborator, not a passive tool executor.
+**Status**: Approved
+**Goal**: One command (`/auto`) that understands, plans, gets approval, executes to completion, and stays healthy across long sessions.
 
-## Problem Statement
+## Core Principle
 
-god-code currently has three UX gaps:
+Replace 3 separate features (proactive questions + plan mode + autonomous mode) with **one unified flow**. The agent decides internally when to ask, when to plan, and when to execute. The user gives direction and approves the plan — everything else is automatic.
 
-1. **The agent never asks questions** — the system prompt doesn't instruct the LLM to clarify ambiguity, confirm scope, or suggest alternatives. The only proactive checkpoint is gameplay intent (one narrow trigger). Safety enforcement is done by silently rejecting tool calls, which the LLM retries or gives up on.
+---
 
-2. **Plan mode is just "read-only mode"** — there's no structured plan output, no step approval, no plan-to-execution transition. Users get a text wall and must manually copy-paste instructions.
+## `/auto` — Smart Agent Flow
 
-3. **No autonomous mode** — whether you're fixing a typo or building a boss system, every operation goes through the same permission pipeline. There's no way to say "I trust you, just do it."
+### Phase 1: UNDERSTAND (1 round)
 
-## Design
+Agent scans codebase + design memory, then decides:
+- If scope is clear → skip to Phase 2
+- If ambiguous → ask 1-2 targeted questions (multi-choice preferred)
+- If design memory conflicts with request → surface the conflict
 
-### A. Proactive Questioning System
-
-#### A1. System Prompt Injection — "When to Ask"
-
-Add a `_proactive_rules_section()` to `prompts/assembler.py` that injects context-aware questioning rules:
-
+**System prompt injection for this phase:**
 ```
-## When to Ask Before Acting
-
-You MUST pause and ask the user before proceeding when:
-
-1. **Ambiguous scope**: The request could affect 1 file or 20. Ask which.
-   Example: "fix the UI" → "Which UI? I see HUD, MainMenu, and PauseScreen."
-
-2. **Large blast radius**: Your plan would modify 5+ files. Confirm the scope.
-   Example: "This will change 8 files across 3 directories. Proceed?"
-
-3. **Destructive operations**: Deleting files, removing nodes, resetting state.
-   Example: "This will remove the EnemySpawner node and its 3 children. Confirm?"
-
-4. **Architecture decisions**: Creating new systems, choosing patterns, adding autoloads.
-   Example: "Should I use a state machine or behavior tree for this AI?"
-
-5. **Conflicting with design memory**: The request contradicts established rules.
-   Example: "Design memory says 'no physics-based movement', but you're asking for RigidBody2D."
-
-6. **Missing information**: You need a detail the user hasn't provided.
-   Example: "What resolution should the sprite be? Design memory says 64x64."
-
-You SHOULD proceed without asking when:
-- The scope is clear and contained (1-3 files)
-- The request matches existing patterns in the codebase
-- You have all the information needed
-- The change is easily reversible (edit, not delete)
+Scan the project and assess whether the request is clear enough to plan.
+Ask at most 2 questions if:
+- The scope is ambiguous (could mean 2+ fundamentally different things)
+- A critical implementation choice exists (state machine vs behavior tree, etc.)
+- The request conflicts with design memory
+Do NOT ask if:
+- The scope is obvious from context
+- You have enough information to produce a concrete plan
+- The question is about a minor detail you can decide yourself
 ```
 
-#### A2. Engine-Level Proactive Checkpoints
+**Key**: Questions are asked as part of the agent's text response, not via engine checkpoints. This keeps the flow natural — the user answers in the next message, agent proceeds to Phase 2.
 
-Add checkpoint hooks in `engine.py` that trigger BEFORE tool execution:
+### Phase 2: PLAN (1 round)
 
-```python
-class ProactiveCheckpoint:
-    """A question the engine wants to ask the user before proceeding."""
-    question: str
-    options: list[str] | None = None  # None = free text
-    context: str = ""
-    skip_label: str = "Proceed anyway"
-
-# New engine method
-async def _check_proactive_gates(self, response: Message) -> ProactiveCheckpoint | None:
-    """Analyze model response before executing tools. Return checkpoint if needed."""
-
-    # Gate 1: Blast radius check
-    tool_count = len(response.tool_calls or [])
-    write_tools = [tc for tc in (response.tool_calls or []) if not self.registry.get(tc.name).is_read_only()]
-    if len(write_tools) >= 5 and self.mode != "autonomous":
-        return ProactiveCheckpoint(
-            question=f"About to modify {len(write_tools)} files. Proceed?",
-            options=["Yes, proceed", "Show me the plan first", "Cancel"],
-        )
-
-    # Gate 2: Mode mismatch
-    if self.mode == "plan" and write_tools:
-        return ProactiveCheckpoint(
-            question="You're in plan mode but the request implies changes. Switch to apply mode?",
-            options=["Switch to apply", "Stay in plan", "Cancel"],
-        )
-
-    # Gate 3: Destructive operations (delete, remove, reset)
-    destructive = [tc for tc in write_tools if "delete" in tc.name or "remove" in tc.name]
-    if destructive:
-        return ProactiveCheckpoint(
-            question=f"This includes {len(destructive)} destructive operations. Confirm?",
-            options=["Yes, delete", "Show details", "Cancel"],
-        )
-
-    return None  # No checkpoint needed
-```
-
-#### A3. TUI Checkpoint Display
-
-New `display.py` method for inline checkpoints:
-
-```python
-def proactive_checkpoint(self, checkpoint: ProactiveCheckpoint) -> str:
-    """Display a checkpoint panel and return user's choice."""
-    # Rich Panel with question + options
-    # Inline in the chat flow, not a separate menu
-    # Returns selected option text or user's free text
-```
-
-### B. Plan Mode Redesign — Structured Plans
-
-#### B1. Plan Output Format
-
-When in plan mode, the system prompt instructs the LLM to output structured plans:
+Agent outputs a structured plan. Format enforced via system prompt:
 
 ```
-## Plan Mode Output Format
-
-When in plan mode, output plans in this exact format:
-
 ### Plan: [title]
 
-**Scope**: [number] files | **Risk**: [low/medium/high] | **Estimated tools**: [count]
+**Scope**: [N] files | **Risk**: low/medium/high | **Steps**: [N]
 
-1. **[action verb] [target]** — [description]
-   - Files: `path/to/file.gd`, `path/to/scene.tscn`
-   - Risk: low
-   - Reversible: yes
+1. [action verb] [target] — [one-line description]
+   Files: `path/file.gd`
 
-2. **[action verb] [target]** — [description]
-   - Files: `path/to/other.gd`
-   - Risk: medium
-   - Reversible: yes
+2. [action verb] [target] — [one-line description]
+   Files: `path/scene.tscn`, `path/script.gd`
 
 3. ...
 
-**Dependencies**: Step 2 requires Step 1.
-**Risks**: [any risks or concerns]
-**Alternative approaches**: [if applicable]
+Risks: [if any]
 ```
 
-#### B2. Plan Storage and Execution
+**User responds with one of:**
+- `approve` or `go` → execute all steps
+- `skip 3` → execute all except step 3
+- `add: also do X` → agent appends a step and re-shows plan
+- `cancel` → abort
+
+**Plan storage**: Stored on `engine.current_plan: ExecutionPlan` (not in message list). Survives across rounds but doesn't bloat context.
 
 ```python
 @dataclass
 class PlanStep:
     index: int
-    action: str          # "create", "modify", "delete", "configure"
-    target: str          # human-readable target
-    description: str
-    files: list[str]
-    risk: str            # low, medium, high
-    status: str = "pending"  # pending, approved, rejected, completed, failed
+    action: str         # create, modify, delete, configure, validate
+    target: str         # human-readable: "boss state machine base class"
+    files: list[str]    # paths
+    status: str = "pending"  # pending | approved | skipped | running | done | failed
+    summary: str = ""   # filled after completion: "+45 lines, validated OK"
 
 @dataclass
 class ExecutionPlan:
     title: str
     steps: list[PlanStep]
-    scope_files: int
-    overall_risk: str
+    risk: str           # low, medium, high
+    created_at: str     # ISO timestamp
+```
+
+### Phase 3: EXECUTE (N rounds, fully automatic)
+
+Engine switches to apply mode internally and executes approved steps sequentially.
+
+**Status line** (always visible, one line, updates in-place):
+```
+⚡ Step 2/5: editing boss_phase_spread.gd...
+```
+
+**`/status` command** expands to full Rich panel:
+```
+┌─ Plan: Add 3-phase boss system ───────────────────┐
+│ ✅ 1. Create BossStateMachine      [2 files, +98]  │
+│ 🔄 2. Implement phase scripts      [editing...]    │
+│ ⏳ 3. Create boss scene                            │
+│ ⏳ 4. Wire into spawner                            │
+│ ── 5. Validate (skipped)                           │
+│                                                     │
+│ Progress: 1/4 | Tokens: 8,200 | Time: 1m 24s      │
+└─────────────────────────────────────────────────────┘
+```
+
+**Permission bypass during execute:**
+
+| Check | Behavior |
+|-------|----------|
+| Read-before-write | Auto-read silently, then write |
+| Protected paths | Warn in log, allow |
+| Risk: MEDIUM/HIGH | Allow + log |
+| Risk: CRITICAL | Stop and ask user |
+| Quality gate fail | Auto-retry fix (max 3x per step) |
+| 3x consecutive failures | Stop, show report, ask user |
+
+**Step completion flow:**
+1. Execute step's tool calls
+2. Run quality gate on modified files
+3. If pass → mark step done, compress step context, move to next
+4. If fail → auto-fix attempt (up to 3x) → still fail → pause
+
+**User can type at any time during execution:**
+- Any input → pause after current step finishes, show progress, wait for instruction
+- `/status` → show full plan panel without pausing
+- `/cancel` → stop execution, keep completed work
+
+### Phase 4: REPORT
+
+After all steps complete (or stopped):
+
+```
+┌─ Done ─────────────────────────────────────────────┐
+│ Plan: Add 3-phase boss system                       │
+│ Steps: 4/4 complete | 1 skipped                     │
+│ Files: 3 created, 2 modified                        │
+│ Validation: passed                                  │
+│ Tokens: 18,200 | Cost: $0.05 | Time: 3m 12s        │
+└─────────────────────────────────────────────────────┘
+```
+
+Auto-updates:
+- Design memory: if new systems/patterns were created
+- Changeset: saved to session for `/resume`
+- Plan status: saved to session for `/resume`
+
+---
+
+## Context Protection Layer
+
+### Problem
+`/auto` can run 20+ tool rounds. Without protection, context bloats and quality degrades.
+
+### Solution: 4 mechanisms
+
+#### 1. Tool Result Truncation
+
+```python
+MAX_TOOL_RESULT_CHARS = 2000
+
+def truncate_tool_result(content: str) -> str:
+    """Keep first 1000 + last 500 chars, insert [...truncated N chars...]."""
+    if len(content) <= MAX_TOOL_RESULT_CHARS:
+        return content
+    head = content[:1200]
+    tail = content[-500:]
+    omitted = len(content) - 1700
+    return f"{head}\n[...truncated {omitted} chars...]\n{tail}"
+```
+
+Applied in `_execute_pending_tools()` before appending tool result to messages.
+
+#### 2. Step Completion Compression
+
+When a plan step completes, replace all its tool results + quality reports with a single summary:
+
+```python
+def compress_completed_step(self, step: PlanStep):
+    """Replace step's messages with 1-line summary."""
+    # Find messages from this step's execution
+    # Replace with: "[Step 2 done: modified boss_phase_spread.gd +45 lines, validated OK]"
+    # Keeps recent context clean for next step
+```
+
+This is the key innovation for `/auto` — each completed step shrinks to ~50 tokens instead of accumulating 2000+ tokens of tool results.
+
+#### 3. Report Pruning
+
+```python
+MAX_QUALITY_REPORTS_IN_CONTEXT = 2  # Only keep latest 2
+
+def prune_old_reports(self):
+    """Remove quality/reviewer/playtest reports older than the last 2."""
+    # Scan messages for [SYSTEM] Quality gate / Reviewer / Playtest
+    # Keep most recent 2, remove older ones
+```
+
+#### 4. Health Monitor
+
+```python
+@dataclass
+class ContextHealth:
+    token_usage_ratio: float     # 0.0 - 1.0
+    rounds_since_compact: int
+    consecutive_errors: int       # Same error 3+ times = stuck
+    tool_success_rate: float      # Below 50% = something wrong
+    steps_completed: int
+    steps_remaining: int
 
     @property
-    def approved_steps(self) -> list[PlanStep]:
-        return [s for s in self.steps if s.status == "approved"]
+    def should_pause(self) -> bool:
+        return (
+            self.consecutive_errors >= 3
+            or self.tool_success_rate < 0.3
+            or self.token_usage_ratio > 0.9
+        )
+
+    @property
+    def should_compact(self) -> bool:
+        return self.token_usage_ratio > 0.6 or self.rounds_since_compact > 5
 ```
 
-#### B3. New Commands
+**On `should_pause`**: Stop execution, show health report, ask user.
+**On `should_compact`**: Run mini-compact (more aggressive than standard 75% threshold).
 
-```
-/plan               — show current plan (if any)
-/plan approve       — approve all pending steps
-/plan approve 1,3,5 — approve specific steps
-/plan reject 2      — reject a step
-/plan execute       — switch to apply mode and execute approved steps
-/plan clear         — discard current plan
-```
+---
 
-#### B4. Plan-to-Execution Flow
+## Session Handoff (Cross-Session Continuity)
 
-```
-User: "refactor the enemy system to use state machines"
-                    ↓
-[Plan mode] Agent inspects codebase, outputs structured plan
-                    ↓
-/plan → User reviews plan (5 steps shown)
-/plan reject 4 → User rejects optional step
-/plan approve → Approve remaining 4 steps
-/plan execute → Engine switches to apply mode, executes steps 1→2→3→5
-                    ↓
-After each step: checkpoint
-  "Step 1 complete (create StateMachine base). Continue to Step 2?"
-                    ↓
-[All steps done] → Auto quality gate → Report
-```
-
-### C. Autonomous Mode
-
-#### C1. Mode Definition
-
-Add a 6th interaction mode: `autonomous` (or `/turbo`).
+### Enhanced SessionRecord
 
 ```python
-# In modes.py
-ModeSpec(
-    name="autonomous",
-    label="Autonomous",
-    description="Full tool access with minimal confirmations. Agent works until done.",
-    allowed_tools=APPLY_TOOLS | {"analyze_screenshot", "score_screenshot"},
-    system_hint=(
-        "You are in AUTONOMOUS mode. Execute the task completely without pausing. "
-        "Chain tool calls aggressively. Fix validation errors immediately. "
-        "Only stop to ask the user if you encounter a genuine ambiguity that "
-        "could lead to two fundamentally different implementations."
-    ),
-)
+@dataclass
+class SessionRecord:
+    # ... existing fields ...
+
+    # NEW: execution state
+    changeset_read: list[str]       # files read this session
+    changeset_modified: list[str]   # files modified this session
+    last_plan: dict | None          # ExecutionPlan serialized
+    completed_steps: list[str]      # "Step 1: created boss_state_machine.gd (+98 lines)"
 ```
 
-#### C2. Permission Bypass Rules
+### `/resume` Behavior
 
-In autonomous mode, the permission pipeline changes:
-
-| Check | Normal Mode | Autonomous Mode |
-|-------|-------------|-----------------|
-| Mode tool allowlist | Enforced | Same as apply |
-| Read-before-write hook | Block | Auto-read then write |
-| Protected path hook | Block | Warn but allow |
-| Risk: MEDIUM | Allow | Allow |
-| Risk: HIGH | Allow (apply/fix only) | Allow + log |
-| Risk: CRITICAL | Block always | Block always (never bypass) |
-| Quality gate failures | Inject report | Auto-retry fix (up to 3x) |
-| Round limit | 20 | 40 |
-| Blast radius checkpoint | Prompt user | Skip |
-
-#### C3. Auto-Read-Before-Write
-
-The biggest friction in normal mode is the read-before-write hook. In autonomous mode:
-
-```python
-# In hooks.py
-class AutoReadBeforeWriteHook:
-    """In autonomous mode, auto-read the file before allowing write."""
-
-    async def pre_execute(self, tool, input, context):
-        if context.mode != "autonomous":
-            return RequireReadBeforeWriteHook().pre_execute(tool, input, context)
-
-        # Auto-read the file if not yet read
-        path = getattr(input, "path", None)
-        if path and path not in context.changeset.read_files:
-            read_tool = context.registry.get("read_file")
-            if read_tool:
-                await read_tool.execute(read_tool.Input(path=path))
-                context.changeset.read_files.add(str(Path(path).resolve()))
-        return HookResult()  # Allow
-```
-
-#### C4. Activation and Safety
+On resume, inject a context restoration message:
 
 ```
-/mode autonomous    — enter autonomous mode
-/turbo              — alias for /mode autonomous
+[SYSTEM] Restored session context:
+- Previous plan: "Add 3-phase boss system" (4/5 steps complete)
+- Files modified last session: boss_state_machine.gd, boss_phase_spread.gd, ...
+- Last step completed: Step 4 (wire into spawner)
+- Remaining: Step 5 (validate)
+
+Design memory is current. Changeset has been restored.
 ```
 
-**Safety rails that NEVER change regardless of mode:**
-1. CRITICAL risk operations always blocked (rm -rf, git reset --hard, etc.)
-2. Project root containment always enforced
-3. Round limit enforced (40 in autonomous, 20 otherwise)
-4. Token budget enforced
-5. `.godot` import database never directly modified
+User can then:
+- Continue where they left off: "continue the plan"
+- Start something new: just type a new request
+- `/status` to see the restored plan state
 
-**Exit conditions:**
-- User types anything → autonomous pauses, shows progress, waits
-- Round limit reached → report progress, ask to continue
-- 3 consecutive quality gate failures → stop and ask
+---
 
-### D. Implementation Priority
+## Proactive Questioning (Simplified)
 
-| Phase | Items | Effort | Impact |
-|-------|-------|--------|--------|
-| **D1** | System prompt proactive rules (A1) + mode mismatch detection (A2 Gate 2) | 2h | High — agent starts asking smart questions |
-| **D2** | Autonomous mode definition (C1) + permission bypass (C2) + auto-read (C3) | 4h | High — removes friction for experienced users |
-| **D3** | Structured plan output format (B1) + plan storage (B2) | 3h | Medium — better plan mode UX |
-| **D4** | Plan commands (B3) + plan-to-execution flow (B4) | 4h | Medium — complete plan workflow |
-| **D5** | Blast radius checkpoint (A2 Gate 1) + destructive checkpoint (A2 Gate 3) | 2h | Medium — safety improvement |
-| **D6** | TUI checkpoint display (A3) | 2h | Medium — visual polish |
+Instead of complex engine-level checkpoint gates, proactive questioning is handled entirely through the system prompt in Phase 1 (UNDERSTAND). The agent's own intelligence decides when to ask.
 
-### E. Summary
+**Additional system prompt rules for ALL modes (not just /auto):**
 
 ```
-Before:
-  User → Request → [Agent blindly executes or silently fails] → Result
+## When to Pause and Ask
 
-After:
-  User → Request
-    ↓
-  [Proactive check: scope clear? blast radius? mode match?]
-    ↓ (if unclear)
-  Agent: "I see 3 possible interpretations. Which do you mean?"
-    ↓ (if clear)
-  [Execute in current mode]
-    ↓ plan mode                    ↓ apply mode               ↓ autonomous mode
-  Structured plan output          Normal execution            Aggressive chaining
-  /plan approve → /plan execute   Quality gates + review      Auto-fix, minimal pauses
-                                                              Only stops on ambiguity
+Before making changes, briefly assess scope. If your plan would:
+- Modify 5+ files → state the scope and ask "proceed?"
+- Delete anything → list what will be removed and ask "confirm?"
+- Conflict with design memory → quote the conflict and ask
+
+When the user says something vague like "fix the UI" or "improve performance":
+- List what you found and ask which to address
+- Do NOT guess and proceed on all of them
 ```
+
+This replaces the engine-level `ProactiveCheckpoint` class from the original design — simpler, uses LLM intelligence instead of hardcoded rules.
+
+---
+
+## Implementation Plan
+
+| Phase | Deliverable | Effort | Files |
+|-------|-------------|--------|-------|
+| **1** | ExecutionPlan dataclass + PlanStep | 1h | `runtime/execution_plan.py` |
+| **2** | `/auto` command parsing + Phase 1-2 (understand + plan) | 3h | `cli/commands.py`, `prompts/assembler.py` |
+| **3** | Phase 3 execute loop + status line + /status panel | 4h | `runtime/engine.py`, `tui/display.py` |
+| **4** | Tool result truncation + step compression | 2h | `runtime/context_manager.py`, `runtime/engine.py` |
+| **5** | Health monitor + auto-pause on degradation | 2h | `runtime/context_manager.py` |
+| **6** | Permission bypass for auto-execute (auto-read, allow HIGH) | 2h | `security/hooks.py`, `security/policies.py` |
+| **7** | Session handoff (changeset + plan in SessionRecord) | 2h | `runtime/session.py` |
+| **8** | System prompt proactive rules (all modes) | 1h | `prompts/assembler.py` |
+| **9** | Report pruning + mini-compact during execution | 2h | `runtime/context_manager.py` |
+| **10** | Testing + integration | 3h | `tests/` |
+
+**Total: ~22h across 10 phases**
+
+**Dependencies:**
+```
+Phase 1 → Phase 2 → Phase 3 (core flow)
+Phase 4 + 5 + 9 (context protection, parallel-safe)
+Phase 6 (permissions, independent)
+Phase 7 (session, independent)
+Phase 8 (prompts, independent)
+Phase 10 waits for all
+```
+
+Phases 4-9 can run in parallel after Phase 3.
