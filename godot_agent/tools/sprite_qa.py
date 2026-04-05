@@ -7,7 +7,7 @@ import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 from godot_agent.runtime.design_memory import AssetSpec
 from godot_agent.runtime.visual_regression import artifact_dir, slugify_artifact_name
@@ -47,32 +47,31 @@ def target_dimensions(spec: AssetSpec, fallback_size: int | tuple[int, int] | No
 
 def _count_remaining_key_pixels(image: Image.Image, key: tuple[int, int, int], tolerance: int) -> int:
     rgba = image.convert("RGBA")
-    pixels = rgba.load()
-    remaining = 0
-    for y in range(rgba.height):
-        for x in range(rgba.width):
-            r, g, b, a = pixels[x, y]
-            if a == 0:
-                continue
-            if (
-                abs(r - key[0]) <= tolerance
-                and abs(g - key[1]) <= tolerance
-                and abs(b - key[2]) <= tolerance
-            ):
-                remaining += 1
-    return remaining
+    # Per-channel absolute difference against the key colour
+    key_img = Image.new("RGB", rgba.size, key)
+    diff = ImageChops.difference(rgba.convert("RGB"), key_img)
+    # Each channel: 255 if within tolerance, else 0
+    r_ok, g_ok, b_ok = [
+        ch.point(lambda p, t=tolerance: 255 if p <= t else 0) for ch in diff.split()
+    ]
+    # AND: pixel is key-coloured when all three channels match
+    # multiply(255, 255) / 255 == 255; multiply(255, 0) / 255 == 0
+    rgb_match = ImageChops.multiply(ImageChops.multiply(r_ok, g_ok), b_ok)
+    # Exclude fully-transparent pixels (alpha == 0)
+    opaque_mask = rgba.getchannel("A").point(lambda p: 255 if p > 0 else 0)
+    result = ImageChops.multiply(rgb_match, opaque_mask)
+    # Count pixels with value 255 (index 255 in the histogram)
+    return result.histogram()[255]
 
 
 def _count_alpha_pixels(image: Image.Image) -> tuple[bool, int, int]:
     rgba = image.convert("RGBA")
     alpha = rgba.getchannel("A")
-    transparent = 0
-    soft = 0
-    for value in alpha.tobytes():
-        if value < 255:
-            transparent += 1
-        if 0 < value < 255:
-            soft += 1
+    hist = alpha.histogram()
+    # transparent = pixels with alpha < 255 (indices 0..254)
+    transparent = sum(hist[:255])
+    # soft = pixels with 0 < alpha < 255 (indices 1..254)
+    soft = sum(hist[1:255])
     return transparent > 0, transparent, soft
 
 
