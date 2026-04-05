@@ -175,8 +175,13 @@ def _is_configured() -> bool:
     return _has_usable_provider_auth(cfg)
 
 
-def _check_update() -> None:
-    """Check backend API for a newer version. Non-blocking, fails silently."""
+def _check_update(verbose: bool = False) -> None:
+    """Check backend API for a newer version.
+
+    Args:
+        verbose: If True, always show version info (for /version command).
+                 If False, only show when update available (startup check).
+    """
     try:
         import httpx as _httpx
         from packaging.version import Version
@@ -186,19 +191,48 @@ def _check_update() -> None:
             latest = data.get("latest", _VERSION)
             message = data.get("message", "")
             update_url = data.get("update_url", "https://github.com/888wing/god-code")
-            if Version(latest) > Version(_VERSION):
-                click.secho(f"  Update available: {_VERSION} → {latest}", fg="yellow")
+            has_update = Version(latest) > Version(_VERSION)
+            min_ver = data.get("min_supported", "0.0.0")
+            is_unsupported = Version(_VERSION) < Version(min_ver)
+
+            if verbose:
+                click.echo()
+                click.secho(f"  god-code v{_VERSION}", fg="cyan", bold=True)
+                click.echo(f"  Latest:  v{latest}")
+                click.echo(f"  Website: https://godcode.dev")
+                click.echo(f"  GitHub:  {update_url}")
+                click.echo()
+
+            if has_update:
+                click.secho(f"  Update available: v{_VERSION} → v{latest}", fg="yellow", bold=True)
                 if message:
                     click.echo(f"  {message}")
-                click.echo(f"  Run: pipx upgrade god-code  |  {update_url}")
                 click.echo()
-            min_ver = data.get("min_supported", "0.0.0")
-            if Version(_VERSION) < Version(min_ver):
-                click.secho(f"  ⚠ Your version {_VERSION} is no longer supported (min: {min_ver})", fg="red", bold=True)
-                click.echo(f"  Please update: pipx upgrade god-code")
+                click.secho("  Upgrade:", fg="white", bold=True)
+                click.echo("    pipx upgrade god-code              # if installed via pipx")
+                click.echo("    pip install --upgrade god-code      # if installed via pip")
+                click.echo(f"    git pull                            # if cloned from GitHub")
                 click.echo()
+            elif verbose:
+                click.secho("  You're on the latest version.", fg="green")
+                click.echo()
+
+            if is_unsupported:
+                click.secho(f"  Your version v{_VERSION} is no longer supported (min: v{min_ver})", fg="red", bold=True)
+                click.echo("  Please upgrade immediately:")
+                click.echo("    pipx upgrade god-code")
+                click.echo()
+        elif verbose:
+            click.echo()
+            click.secho(f"  god-code v{_VERSION}", fg="cyan", bold=True)
+            click.echo("  Could not reach update server.")
+            click.echo()
     except Exception:
-        pass
+        if verbose:
+            click.echo()
+            click.secho(f"  god-code v{_VERSION}", fg="cyan", bold=True)
+            click.echo("  Could not check for updates (offline?).")
+            click.echo()
 
 
 def _run_setup_wizard(config_path: Path | None = None) -> None:
@@ -1346,6 +1380,10 @@ def chat(project: str = ".", config: str | None = None):
 
                 if cmd in ("/quit", "quit", "/exit", "exit"):
                     break
+
+                if cmd in ("/version", "version"):
+                    _pkg_attr("_check_update", _check_update)(verbose=True)
+                    continue
 
                 if cmd in ("/save", "save"):
                     path = _save_chat_session(cfg, session_id, engine, project_root, proj_name)
