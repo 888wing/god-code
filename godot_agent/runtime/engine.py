@@ -539,6 +539,7 @@ class ConversationEngine:
 
     async def _call_model(self, tools: list[dict] | None, use_streaming: bool, turn: TurnStats, round_index: int = 0) -> tuple[Message, bool]:
         stream_active = use_streaming and self.on_stream_chunk is not None
+        route_metadata = self._build_route_metadata(round_index)
         if stream_active:
             if self.on_stream_start:
                 self.on_stream_start()
@@ -549,9 +550,9 @@ class ConversationEngine:
                 self.messages,
                 tools,
                 on_chunk=self.on_stream_chunk,
+                route_metadata=route_metadata,
             )
         else:
-            route_metadata = self._build_route_metadata(round_index)
             chat_resp = await self.client.chat(self.messages, tools, route_metadata=route_metadata)
 
         turn.usage = turn.usage + chat_resp.usage

@@ -1585,7 +1585,15 @@ def chat(project: str = ".", config: str | None = None):
                     continue
                 except httpx.HTTPStatusError as e:
                     status_code = e.response.status_code if e.response is not None else "?"
-                    display.error(f"API request failed ({status_code}). The session is still active.")
+                    detail = ""
+                    if e.response is not None:
+                        try:
+                            err_body = e.response.json()
+                            detail = err_body.get("error", {}).get("message", "") if isinstance(err_body.get("error"), dict) else str(err_body.get("error", ""))
+                        except Exception:
+                            detail = e.response.text[:200]
+                    detail_str = f": {detail}" if detail else ""
+                    display.error(f"API request failed ({status_code}){detail_str}. The session is still active.")
                     continue
 
                 # Token usage

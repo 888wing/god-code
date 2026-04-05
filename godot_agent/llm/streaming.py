@@ -13,25 +13,73 @@ async def stream_chat_with_callback(
     messages: list[Message],
     tools: list[dict] | None = None,
     on_chunk: Callable[[str], None] | None = None,
+    route_metadata: dict | None = None,
 ) -> ChatResponse:
     """Stream a chat completion, calling on_chunk for each text delta.
 
     Returns the complete ChatResponse with assembled tool calls and usage.
+    When backend is configured and route_metadata provided, streams via backend.
     """
+    if client._use_backend and route_metadata:
+        return await _stream_via_backend(client, messages, tools, on_chunk, route_metadata)
+    return await _stream_direct(client, messages, tools, on_chunk)
+
+
+async def _stream_direct(
+    client: LLMClient,
+    messages: list[Message],
+    tools: list[dict] | None,
+    on_chunk: Callable[[str], None] | None,
+) -> ChatResponse:
+    """Stream directly from provider API."""
     body = client._build_request_body(messages, tools)
     body["stream"] = True
     body["stream_options"] = {"include_usage": True}
 
+    return await _consume_sse_stream(
+        client, client._build_url(), client._build_headers(), body, on_chunk
+    )
+
+
+async def _stream_via_backend(
+    client: LLMClient,
+    messages: list[Message],
+    tools: list[dict] | None,
+    on_chunk: Callable[[str], None] | None,
+    route_metadata: dict,
+) -> ChatResponse:
+    """Stream via backend orchestration API."""
+    body: dict = {
+        "messages": [{"role": m.role, "content": m.content} for m in messages],
+        "metadata": route_metadata,
+        "stream": True,
+    }
+    if tools:
+        body["tools"] = tools
+    if client.config.backend_provider_keys:
+        body["provider_keys"] = client.config.backend_provider_keys
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if client.config.backend_api_key:
+        headers["Authorization"] = f"Bearer {client.config.backend_api_key}"
+
+    url = f"{client._backend_url}/v1/orchestrate"
+    return await _consume_sse_stream(client, url, headers, body, on_chunk)
+
+
+async def _consume_sse_stream(
+    client: LLMClient,
+    url: str,
+    headers: dict[str, str],
+    body: dict,
+    on_chunk: Callable[[str], None] | None,
+) -> ChatResponse:
+    """Consume an SSE stream and assemble the final ChatResponse."""
     content_parts: list[str] = []
     tool_calls_acc: dict[int, dict] = {}  # index -> {id, name, arguments}
     usage = TokenUsage()
 
-    async with client._http.stream(
-        "POST",
-        client._build_url(),
-        headers=client._build_headers(),
-        json=body,
-    ) as resp:
+    async with client._http.stream("POST", url, headers=headers, json=body) as resp:
         resp.raise_for_status()
         async for line in resp.aiter_lines():
             if not line.startswith("data: "):
