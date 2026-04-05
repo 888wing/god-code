@@ -64,7 +64,7 @@ class ValidationSuite:
     async def _run_check(self, name: str) -> CheckResult:
         """Run a single check by name.
 
-        Delegates to existing validation functions from quality_gate.py.
-        Concrete implementations will be wired in Task 2.
+        Stub — concrete implementations will be added when check
+        functions are migrated from quality_gate / reviewer.
         """
         return CheckResult(name=name, status="pass", summary="", details="")

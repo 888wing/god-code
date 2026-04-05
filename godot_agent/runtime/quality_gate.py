@@ -208,6 +208,7 @@ async def run_quality_gate(
                     )
 
         if abs_path.suffix == ".tscn":
+            scene = None
             cached = validation_suite.get("tscn-validate")
             if cached:
                 _use_cached(report, cached, f"validate_tscn {abs_path}")
@@ -268,6 +269,9 @@ async def run_quality_gate(
             if cached:
                 _use_cached(report, cached, f"validate_ui_layout {abs_path}")
             else:
+                if scene is None:
+                    text = abs_path.read_text(encoding="utf-8", errors="replace")
+                    scene = parse_tscn(text)
                 ui_warnings = validate_ui_layout(scene)
                 if any(node.type == "Control" or node.type.endswith("Container") for node in scene.nodes):
                     _add_check(
@@ -284,6 +288,9 @@ async def run_quality_gate(
             if cached:
                 _use_cached(report, cached, f"validate_audio_nodes {abs_path}")
             else:
+                if scene is None:
+                    text = abs_path.read_text(encoding="utf-8", errors="replace")
+                    scene = parse_tscn(text)
                 audio_warnings = validate_audio_nodes(scene, project_root)
                 if any("AudioStreamPlayer" in (node.type or "") for node in scene.nodes):
                     _add_check(
