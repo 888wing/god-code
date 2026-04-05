@@ -527,7 +527,7 @@ class ConversationEngine:
     def _build_route_metadata(self, round_index: int = 0) -> dict:
         """Build routing metadata for backend orchestration."""
         skill = self.active_skills[0] if self.active_skills else None
-        return {
+        meta: dict = {
             "session_id": getattr(self, "session_id", ""),
             "agent_role": getattr(self, "_current_agent_role", "worker"),
             "skill": skill,
@@ -536,6 +536,19 @@ class ConversationEngine:
             "changeset_size": len(self.changeset.modified_files),
             "estimated_tokens": 0,
         }
+        # Backend routing hints from LLMConfig (propagated from AgentConfig)
+        llm_cfg = getattr(self.client, "config", None)
+        if llm_cfg:
+            cost_pref = getattr(llm_cfg, "backend_cost_preference", "")
+            if cost_pref and cost_pref != "balanced":
+                meta["cost_preference"] = cost_pref
+            force_provider = getattr(llm_cfg, "backend_force_provider", "")
+            if force_provider:
+                meta["force_provider"] = force_provider
+            force_model = getattr(llm_cfg, "backend_force_model", "")
+            if force_model:
+                meta["force_model"] = force_model
+        return meta
 
     async def _call_model(self, tools: list[dict] | None, use_streaming: bool, turn: TurnStats, round_index: int = 0) -> tuple[Message, bool]:
         stream_active = use_streaming and self.on_stream_chunk is not None

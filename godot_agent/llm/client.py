@@ -44,7 +44,10 @@ class LLMClient:
         *,
         route_metadata: dict | None = None,
     ) -> ChatResponse:
-        if self._use_backend and route_metadata:
+        if self._use_backend:
+            if route_metadata is None:
+                log.warning("Backend configured but route_metadata is None — building default metadata")
+                route_metadata = {"session_id": "", "agent_role": "worker", "mode": "apply", "round_number": 1}
             return await self._chat_via_backend(messages, tools, route_metadata)
         return await self._chat_direct(messages, tools)
 
@@ -127,11 +130,25 @@ class LLMClient:
         if self.config.backend_api_key:
             headers["Authorization"] = f"Bearer {self.config.backend_api_key}"
 
-        resp = await self._http.post(
-            f"{self._backend_url}/v1/orchestrate",
-            json=body,
-            headers=headers,
-        )
+        import asyncio as _asyncio
+        url = f"{self._backend_url}/v1/orchestrate"
+        for attempt in range(3):
+            resp = await self._http.post(url, json=body, headers=headers)
+            if resp.status_code in (429, 502, 503):
+                wait = min(2 ** attempt * 2, 10)
+                log.warning("Backend %d, retrying in %ds (attempt %d/3)", resp.status_code, wait, attempt + 1)
+                await _asyncio.sleep(wait)
+                continue
+            if resp.status_code >= 400:
+                detail = ""
+                try:
+                    err_body = resp.json()
+                    err_obj = err_body.get("error", {})
+                    detail = err_obj.get("message", "") if isinstance(err_obj, dict) else str(err_obj)
+                except Exception:
+                    detail = resp.text[:200]
+                log.error("Backend API error %d: %s", resp.status_code, detail)
+            break
         resp.raise_for_status()
         data = resp.json()
 
