@@ -176,16 +176,26 @@ def _is_configured() -> bool:
 
 
 def _check_update() -> None:
-    """Check PyPI for a newer version. Non-blocking, fails silently."""
+    """Check backend API for a newer version. Non-blocking, fails silently."""
     try:
         import httpx as _httpx
         from packaging.version import Version
-        resp = _httpx.get("https://pypi.org/pypi/god-code/json", timeout=3)
+        resp = _httpx.get("https://god-code-api.nano122090.workers.dev/v1/version", timeout=3)
         if resp.status_code == 200:
-            latest = resp.json()["info"]["version"]
+            data = resp.json()
+            latest = data.get("latest", _VERSION)
+            message = data.get("message", "")
+            update_url = data.get("update_url", "https://github.com/888wing/god-code")
             if Version(latest) > Version(_VERSION):
                 click.secho(f"  Update available: {_VERSION} → {latest}", fg="yellow")
-                click.echo(f"  Run: pip install --upgrade god-code")
+                if message:
+                    click.echo(f"  {message}")
+                click.echo(f"  Run: pipx upgrade god-code  |  {update_url}")
+                click.echo()
+            min_ver = data.get("min_supported", "0.0.0")
+            if Version(_VERSION) < Version(min_ver):
+                click.secho(f"  ⚠ Your version {_VERSION} is no longer supported (min: {min_ver})", fg="red", bold=True)
+                click.echo(f"  Please update: pipx upgrade god-code")
                 click.echo()
     except Exception:
         pass
