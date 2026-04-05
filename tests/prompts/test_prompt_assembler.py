@@ -1,5 +1,5 @@
 from godot_agent.prompts.assembler import PromptAssembler, PromptContext
-from godot_agent.runtime.design_memory import DesignMemory
+from godot_agent.runtime.design_memory import AssetSpec, CombatProfile, DesignMemory, GameplayIntentProfile
 from godot_agent.godot.impact_analysis import ImpactAnalysisReport
 from godot_agent.runtime.playtest_harness import PlaytestReport, ScenarioResult
 from godot_agent.runtime.quality_gate import QualityCheck, QualityGateReport
@@ -78,6 +78,31 @@ def test_prompt_assembler_includes_collision_skill_when_relevant(tmp_path):
     )
 
     assert "Collision Architecture" in prompt
+
+
+def test_prompt_assembler_includes_genre_template_and_asset_contracts(tmp_path):
+    (tmp_path / "project.godot").write_text('config_version=5\n\n[application]\nconfig/name="BulletGame"\n')
+    assembler = PromptAssembler(PromptContext(project_root=tmp_path))
+
+    prompt = assembler.build(
+        design_memory=DesignMemory(
+            quality_target="demo",
+            asset_spec=AssetSpec(style="pixel_art", target_size=[64, 64], background_key="#00FF00", alpha_required=True),
+        ),
+        intent_profile=GameplayIntentProfile(
+            genre="bullet_hell",
+            enemy_model="scripted_patterns",
+            combat_profile=CombatProfile(
+                player_space_model="free_2d_dodge",
+                density_curve="ramp_up",
+                readability_target="clear_dense",
+            ),
+        ),
+    )
+
+    assert "Bullet Hell Template Library" in prompt
+    assert "Quality Target" in prompt
+    assert "Asset Spec" in prompt
 
 
 def test_prompt_assembler_respects_manual_skill_override(tmp_path):

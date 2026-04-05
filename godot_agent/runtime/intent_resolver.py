@@ -7,7 +7,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from godot_agent.godot.project import parse_project_godot
-from godot_agent.runtime.design_memory import DesignMemory, GameplayIntentProfile
+from godot_agent.runtime.design_memory import (
+    CombatProfile,
+    DesignMemory,
+    GameplayIntentProfile,
+    gameplay_intent_from_data,
+)
 
 
 @dataclass(frozen=True)
@@ -136,6 +141,13 @@ def _profile_for_genre(genre: str, viewport: tuple[int, int], input_actions: set
             enemy_model="scripted_patterns",
             boss_model="phase_based",
             testing_focus=["wave_timing", "pattern_readability", "boss_phase_clear"],
+            combat_profile=CombatProfile(
+                player_space_model="free_2d_dodge" if free_dodge else "horizontal_lane_dodge",
+                density_curve="ramp_up",
+                readability_target="clear_dense",
+                bullet_cleanup_policy="phase_transition_and_timeout",
+                phase_style="telegraphed",
+            ),
         )
     if genre == "topdown_shooter":
         return GameplayIntentProfile(
@@ -146,6 +158,13 @@ def _profile_for_genre(genre: str, viewport: tuple[int, int], input_actions: set
             enemy_model="reactive_ranged",
             boss_model="attack_cycles",
             testing_focus=["spawn_pressure", "targeting", "combat_clarity"],
+            combat_profile=CombatProfile(
+                player_space_model="free_2d_shooting",
+                density_curve="steady_pressure",
+                readability_target="reactive_clear",
+                bullet_cleanup_policy="lifetime_timeout",
+                phase_style="attack_cycles",
+            ),
         )
     if genre == "platformer_enemy":
         return GameplayIntentProfile(
@@ -156,6 +175,13 @@ def _profile_for_genre(genre: str, viewport: tuple[int, int], input_actions: set
             enemy_model="state_machine",
             boss_model="arena_states",
             testing_focus=["patrol_edges", "jump_collisions", "attack_windows"],
+            combat_profile=CombatProfile(
+                player_space_model="lane_and_height_control",
+                density_curve="encounter_spikes",
+                readability_target="timing_windows",
+                bullet_cleanup_policy="despawn_on_range",
+                phase_style="arena_state_swaps",
+            ),
         )
     if genre == "tower_defense":
         return GameplayIntentProfile(
@@ -166,6 +192,13 @@ def _profile_for_genre(genre: str, viewport: tuple[int, int], input_actions: set
             enemy_model="path_followers",
             boss_model="lane_pressure_spikes",
             testing_focus=["path_following", "target_priority", "wave_balance"],
+            combat_profile=CombatProfile(
+                player_space_model="lane_management",
+                density_curve="wave_escalation",
+                readability_target="lane_clarity",
+                bullet_cleanup_policy="despawn_on_goal_or_death",
+                phase_style="wave_spikes",
+            ),
         )
     if genre == "stealth_guard":
         return GameplayIntentProfile(
@@ -176,6 +209,13 @@ def _profile_for_genre(genre: str, viewport: tuple[int, int], input_actions: set
             enemy_model="perception_state_machine",
             boss_model="alert_phases",
             testing_focus=["line_of_sight", "alert_decay", "search_loops"],
+            combat_profile=CombatProfile(
+                player_space_model="cover_and_sightlines",
+                density_curve="low_visible_pressure",
+                readability_target="alert_signals",
+                bullet_cleanup_policy="n/a",
+                phase_style="alert_escalation",
+            ),
         )
     return GameplayIntentProfile()
 
@@ -209,7 +249,7 @@ def resolve_gameplay_intent(
     top_genre, top_score = ranked[0]
 
     if memory.gameplay_intent.confirmed and memory.gameplay_intent.genre:
-        profile = GameplayIntentProfile(**memory.gameplay_intent.to_dict())
+        profile = gameplay_intent_from_data(memory.gameplay_intent.to_dict())
         profile.reasons = [*profile.reasons, "Using confirmed gameplay intent from design memory."]
         profile.conflicts = _detect_conflicts(scores, tokens, memory)
         profile.confidence = max(profile.confidence, 1.0 if not profile.conflicts else 0.7)
@@ -256,6 +296,18 @@ def format_gameplay_intent(profile: GameplayIntentProfile) -> str:
         lines.append(f"- Boss Model: {profile.boss_model}")
     if profile.testing_focus:
         lines.append(f"- Testing Focus: {', '.join(profile.testing_focus)}")
+    if not profile.combat_profile.is_empty:
+        lines.append("- Combat Profile:")
+        if profile.combat_profile.player_space_model:
+            lines.append(f"  - Player Space: {profile.combat_profile.player_space_model}")
+        if profile.combat_profile.density_curve:
+            lines.append(f"  - Density Curve: {profile.combat_profile.density_curve}")
+        if profile.combat_profile.readability_target:
+            lines.append(f"  - Readability: {profile.combat_profile.readability_target}")
+        if profile.combat_profile.bullet_cleanup_policy:
+            lines.append(f"  - Bullet Cleanup: {profile.combat_profile.bullet_cleanup_policy}")
+        if profile.combat_profile.phase_style:
+            lines.append(f"  - Phase Style: {profile.combat_profile.phase_style}")
     lines.append(f"- Confirmed: {'yes' if profile.confirmed else 'no'}")
     lines.append(f"- Confidence: {profile.confidence:.2f}")
     if profile.conflicts:
@@ -343,17 +395,46 @@ def apply_intent_answers(
     base_profile: GameplayIntentProfile,
     answers: dict[str, str],
 ) -> GameplayIntentProfile:
-    profile = _profile_for_genre(
-        answers.get("genre", base_profile.genre),
+    genre = answers.get("genre", base_profile.genre)
+    profile_defaults = _profile_for_genre(
+        genre,
         viewport=(480, 800) if base_profile.camera_model == "vertical_scroller" else (1920, 1080),
         input_actions=set(),
     )
-    merged = {
-        **base_profile.to_dict(),
-        **profile.to_dict(),
-        **answers,
-        "confirmed": True,
-        "confidence": 1.0,
-        "conflicts": [],
-    }
-    return GameplayIntentProfile(**merged)
+    same_genre = not genre or genre == base_profile.genre
+    resolved = GameplayIntentProfile(
+        genre=genre or profile_defaults.genre or base_profile.genre,
+        camera_model=answers.get(
+            "camera_model",
+            base_profile.camera_model if same_genre and base_profile.camera_model else profile_defaults.camera_model or base_profile.camera_model,
+        ),
+        player_control_model=answers.get(
+            "player_control_model",
+            base_profile.player_control_model if same_genre and base_profile.player_control_model else profile_defaults.player_control_model or base_profile.player_control_model,
+        ),
+        combat_model=answers.get(
+            "combat_model",
+            base_profile.combat_model if same_genre and base_profile.combat_model else profile_defaults.combat_model or base_profile.combat_model,
+        ),
+        enemy_model=answers.get(
+            "enemy_model",
+            base_profile.enemy_model if same_genre and base_profile.enemy_model else profile_defaults.enemy_model or base_profile.enemy_model,
+        ),
+        boss_model=answers.get(
+            "boss_model",
+            base_profile.boss_model if same_genre and base_profile.boss_model else profile_defaults.boss_model or base_profile.boss_model,
+        ),
+        testing_focus=list(
+            base_profile.testing_focus if same_genre and base_profile.testing_focus else profile_defaults.testing_focus or base_profile.testing_focus
+        ),
+        combat_profile=(
+            base_profile.combat_profile
+            if same_genre and not base_profile.combat_profile.is_empty
+            else profile_defaults.combat_profile if not profile_defaults.combat_profile.is_empty else base_profile.combat_profile
+        ),
+        reasons=[*base_profile.reasons, "Confirmed via TUI intent checkpoint."],
+        conflicts=[],
+        confirmed=True,
+        confidence=1.0,
+    )
+    return resolved

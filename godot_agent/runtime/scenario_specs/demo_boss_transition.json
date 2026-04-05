@@ -1,0 +1,73 @@
+{
+  "id": "demo_boss_transition",
+  "title": "Demo Boss Transition",
+  "description": "Check that boss introductions and transitions are visibly signaled for demo-quality output.",
+  "quality_targets": ["demo"],
+  "path_contains": ["boss", "phase"],
+  "steps": [
+    {
+      "title": "Replay telegraphed boss transition",
+      "action": "scripted_route",
+      "route_segments": [
+        {
+          "press": ["fire"],
+          "ticks": 90,
+          "state_updates": {
+            "enemy_bullets": 18,
+            "boss_phase": 1,
+            "phase_banner_visible": true,
+            "screen_flash": 0
+          },
+          "events": [
+            { "name": "boss_intro_telegraph" }
+          ],
+          "capture_as": "intro"
+        },
+        {
+          "ticks": 30,
+          "state_updates": {
+            "enemy_bullets": 0,
+            "boss_phase": 2,
+            "phase_banner_visible": true,
+            "screen_flash": 1
+          },
+          "events": [
+            { "name": "boss_transition_cleared" },
+            { "name": "boss_phase_changed", "payload": "phase_2" }
+          ],
+          "capture_as": "transition"
+        }
+      ],
+      "expect_events": ["boss_intro_telegraph", "boss_transition_cleared", "boss_phase_changed"],
+      "sample_asserts": [
+        {
+          "label": "demo transition announces phase",
+          "left_sample": "transition",
+          "left_key": "phase_banner_visible",
+          "op": "==",
+          "value": true
+        },
+        {
+          "label": "demo transition flashes screen",
+          "left_sample": "transition",
+          "left_key": "screen_flash",
+          "op": ">=",
+          "value": 1
+        },
+        {
+          "label": "demo transition clears bullets for readability",
+          "left_sample": "transition",
+          "left_key": "enemy_bullets",
+          "op": "==",
+          "value": 0
+        }
+      ]
+    }
+  ],
+  "source": "manual",
+  "confidence": "medium",
+  "authoritative_assertions": [
+    "boss_transitions_clear_bullets"
+  ],
+  "evidence_policy": "require_live_for_pass"
+}

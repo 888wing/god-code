@@ -1,0 +1,89 @@
+{
+  "id": "demo_wave_pacing",
+  "title": "Demo Wave Pacing",
+  "description": "Check that encounter pacing includes escalation and breathing room for a demo-quality slice.",
+  "quality_targets": ["demo"],
+  "genres": ["bullet_hell", "topdown_shooter", "tower_defense"],
+  "steps": [
+    {
+      "title": "Replay demo pacing route",
+      "action": "scripted_route",
+      "route_segments": [
+        {
+          "press": ["move_right", "fire"],
+          "ticks": 120,
+          "state_updates": {
+            "enemy_bullets": 6,
+            "enemies_alive": 8,
+            "player_lives": 3
+          },
+          "events": [
+            { "name": "wave_started" }
+          ],
+          "capture_as": "opening"
+        },
+        {
+          "release": ["move_right"],
+          "press": ["move_left"],
+          "ticks": 150,
+          "state_updates": {
+            "enemy_bullets": 26,
+            "enemies_alive": 5,
+            "player_lives": 3
+          },
+          "events": [
+            { "name": "wave_pressure" }
+          ],
+          "capture_as": "pressure"
+        },
+        {
+          "release": ["move_left"],
+          "ticks": 90,
+          "state_updates": {
+            "enemy_bullets": 9,
+            "enemies_alive": 2,
+            "player_lives": 3
+          },
+          "events": [
+            { "name": "wave_breathing_room" }
+          ],
+          "capture_as": "breather"
+        }
+      ],
+      "expect_events": ["wave_started", "wave_pressure", "wave_breathing_room"],
+      "sample_asserts": [
+        {
+          "label": "pressure rises above opening",
+          "left_sample": "pressure",
+          "left_key": "enemy_bullets",
+          "op": ">",
+          "right_sample": "opening",
+          "right_key": "enemy_bullets"
+        },
+        {
+          "label": "breather reduces bullet pressure",
+          "left_sample": "pressure",
+          "left_key": "enemy_bullets",
+          "op": ">",
+          "right_sample": "breather",
+          "right_key": "enemy_bullets"
+        },
+        {
+          "label": "player survives demo pacing route",
+          "left_sample": "breather",
+          "left_key": "player_lives",
+          "op": ">=",
+          "value": 1
+        }
+      ]
+    }
+  ],
+  "source": "manual",
+  "confidence": "medium",
+  "authoritative_assertions": [
+    "wave_enemy_density_ramps",
+    "wave_enemy_presence_visible",
+    "wave_player_survives_scripted_route"
+  ],
+  "evidence_policy": "require_live_for_pass"
+}

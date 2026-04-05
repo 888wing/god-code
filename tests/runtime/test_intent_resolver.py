@@ -1,4 +1,4 @@
-from godot_agent.runtime.design_memory import DesignMemory, GameplayIntentProfile
+from godot_agent.runtime.design_memory import CombatProfile, DesignMemory, GameplayIntentProfile
 from godot_agent.runtime.intent_resolver import (
     apply_intent_answers,
     gameplay_profile_to_skill_keys,
@@ -39,6 +39,8 @@ def test_resolve_gameplay_intent_infers_bullet_hell_from_project_signals(tmp_pat
     assert profile.genre == "bullet_hell"
     assert profile.enemy_model == "scripted_patterns"
     assert "wave_timing" in profile.testing_focus
+    assert profile.combat_profile.density_curve == "ramp_up"
+    assert profile.combat_profile.bullet_cleanup_policy == "phase_transition_and_timeout"
 
 
 def test_resolve_gameplay_intent_detects_conflicting_shooter_and_tower_defense_signals(tmp_path):
@@ -83,6 +85,44 @@ def test_apply_intent_answers_marks_profile_confirmed():
     assert updated.genre == "topdown_shooter"
     assert updated.confirmed is True
     assert updated.confidence == 1.0
+    assert updated.combat_profile.player_space_model == "free_2d_shooting"
+
+
+def test_apply_intent_answers_preserves_confirmed_profile_shape_when_genre_is_unchanged():
+    base = GameplayIntentProfile(
+        genre="bullet_hell",
+        camera_model="vertical_scroller",
+        player_control_model="free_2d_dodge",
+        combat_model="pattern_survival",
+        enemy_model="scripted_patterns",
+        boss_model="phase_based",
+        testing_focus=["wave_timing", "pattern_readability", "boss_phase_clear"],
+        combat_profile=CombatProfile(
+            player_space_model="free_2d_dodge",
+            density_curve="ramp_up",
+            readability_target="clear_dense",
+            bullet_cleanup_policy="phase_transition_and_timeout",
+            phase_style="telegraphed",
+        ),
+        confirmed=True,
+        confidence=1.0,
+        reasons=["Using confirmed gameplay intent from design memory."],
+    )
+
+    updated = apply_intent_answers(
+        base,
+        {
+            "genre": "bullet_hell",
+            "player_control_model": "free_2d_dodge",
+            "enemy_model": "scripted_patterns",
+        },
+    )
+
+    assert updated.camera_model == "vertical_scroller"
+    assert updated.combat_model == "pattern_survival"
+    assert updated.testing_focus == ["wave_timing", "pattern_readability", "boss_phase_clear"]
+    assert updated.combat_profile.bullet_cleanup_policy == "phase_transition_and_timeout"
+    assert updated.confirmed is True
 
 
 def test_gameplay_profile_maps_to_genre_skill():

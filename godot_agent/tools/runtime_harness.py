@@ -35,6 +35,7 @@ from godot_agent.runtime.visual_regression import (
 )
 from godot_agent.tools.base import BaseTool, ToolResult
 from godot_agent.tools.file_ops import _validate_path
+from godot_agent.tools.godot_cli import run_godot_import
 from godot_agent.tools.screenshot import ScreenshotTool
 
 
@@ -130,13 +131,21 @@ class GetRuntimeStateTool(_SafeRuntimeTool):
     class Output(BaseModel):
         snapshot: dict[str, Any]
         state: dict[str, Any]
+        contract_state: dict[str, Any]
 
     async def execute(self, input: Input) -> ToolResult:
         _, err = _validate_path(input.project_path)
         if err:
             return ToolResult(error=err)
         snapshot = get_runtime_snapshot()
-        return ToolResult(output=self.Output(snapshot=runtime_snapshot_dict(snapshot), state=runtime_state_dict(snapshot)))
+        state = runtime_state_dict(snapshot)
+        return ToolResult(
+            output=self.Output(
+                snapshot=runtime_snapshot_dict(snapshot),
+                state=state,
+                contract_state=state.get("contract_state", {}),
+            )
+        )
 
 
 class GetEventsSinceTool(_SafeRuntimeTool):
@@ -332,11 +341,16 @@ class SliceSpriteSheetTool(BaseTool):
         tolerance: int = Field(default=60, description="Chroma key tolerance")
         trim: bool = Field(default=False, description="Trim transparent borders from each sliced frame")
         metadata_path: str = Field(default="", description="Optional metadata JSON output path")
+        project_path: str = Field(default="", description="Optional absolute Godot project root used to reimport generated frames")
+        godot_path: str = Field(default="godot", description="Path to the Godot executable used for reimport")
+        reimport_assets: bool = Field(default=False, description="Run Godot --import after writing frames when project_path is provided")
 
     class Output(BaseModel):
         frame_count: int
         metadata_path: str
         frame_paths: list[str]
+        reimported: bool = False
+        import_warnings: list[str] = Field(default_factory=list)
 
     def is_destructive(self) -> bool:
         return False
@@ -370,36 +384,89 @@ class SliceSpriteSheetTool(BaseTool):
             trim=input.trim,
         )
         save_manifest(manifest, metadata_path)
+        reimported = False
+        import_warnings: list[str] = []
+        if input.reimport_assets:
+            if not input.project_path:
+                return ToolResult(error="project_path is required when reimport_assets is true")
+            project_path, project_err = _validate_path(input.project_path)
+            if project_err:
+                return ToolResult(error=project_err)
+            result = await run_godot_import(project_path, godot_path=input.godot_path)
+            reimported = True
+            import_warnings = [warning.message for warning in result.report.warnings]
+            if result.exit_code != 0 or result.report.errors:
+                messages = "; ".join(error.message for error in result.report.errors) or result.raw_output or "unknown Godot import error"
+                return ToolResult(error=f"Godot import failed after slicing sprite sheet: {messages}")
         return ToolResult(
             output=self.Output(
                 frame_count=manifest.frame_count,
                 metadata_path=str(metadata_path),
                 frame_paths=[frame.path for frame in manifest.frames[:50]],
+                reimported=reimported,
+                import_warnings=import_warnings,
             )
         )
 
 
 class ValidateSpriteImportsTool(_SafeRuntimeTool):
     name = "validate_sprite_imports"
-    description = "Validate a sliced sprite manifest or frame directory for missing files and size consistency."
+    description = "Validate a sliced sprite manifest or frame directory for missing files, size consistency, chroma-key cleanup, alpha, and pixel-art acceptance rules."
 
     class Input(BaseModel):
         project_path: str = Field(description="Absolute path to the Godot project root")
         metadata_path: str = Field(default="", description="Optional metadata JSON emitted by slice_sprite_sheet")
         sprite_dir: str = Field(default="", description="Optional directory containing PNG frames when no metadata file is provided")
+        godot_path: str = Field(default="godot", description="Path to the Godot executable used for reimport")
+        reimport_assets: bool = Field(default=True, description="Run Godot --import before validating sprite integrity")
+        smoke_scene_path: str = Field(default="", description="Optional scene path to screenshot after reimport for asset visibility smoke checks")
+        smoke_baseline_id: str = Field(default="", description="Optional baseline id for the smoke screenshot")
+        smoke_tolerance: int = Field(default=0, description="Tolerance used when comparing the smoke screenshot against a baseline")
+        smoke_delay_ms: int = Field(default=1000, description="Delay before screenshot capture during smoke validation")
+        create_baseline: bool = Field(default=False, description="Create the smoke baseline from the captured image when it does not exist")
 
     class Output(BaseModel):
         valid: bool
         frame_count: int
         issues: list[str]
+        warnings: list[str] = Field(default_factory=list)
+        qa_reports: list[str] = Field(default_factory=list)
+        reimported: bool = False
+        smoke_capture_path: str = ""
+        smoke_source: str = ""
+        baseline_matched: bool | None = None
+        baseline_path: str = ""
+        diff_path: str = ""
+        failure_bundle: str = ""
 
     async def execute(self, input: Input) -> ToolResult:
+        from godot_agent.runtime.design_memory import load_design_memory, resolved_asset_spec
+        from godot_agent.tools.sprite_qa import qa_sprite_file
+
         project_path, err = _validate_path(input.project_path)
         if err:
             return ToolResult(error=err)
 
         issues: list[str] = []
+        warnings: list[str] = []
+        qa_reports: list[str] = []
         frame_paths: list[Path] = []
+        asset_spec = resolved_asset_spec(load_design_memory(project_path))
+        reimported = False
+        smoke_capture_path = ""
+        smoke_source = ""
+        baseline_matched: bool | None = None
+        baseline_path = ""
+        diff_path = ""
+        failure_bundle = ""
+
+        if input.reimport_assets:
+            result = await run_godot_import(project_path, godot_path=input.godot_path)
+            reimported = True
+            warnings.extend(warning.message for warning in result.report.warnings)
+            issues.extend(error.message for error in result.report.errors)
+            if result.exit_code != 0:
+                issues.append(f"Godot import exited with code {result.exit_code}.")
 
         if input.metadata_path:
             metadata_path, meta_err = _validate_path(input.metadata_path)
@@ -430,9 +497,89 @@ class ValidateSpriteImportsTool(_SafeRuntimeTool):
 
                 with Image.open(frame_path) as img:
                     dimensions.add(img.size)
+                qa_report = qa_sprite_file(
+                    project_root=project_path,
+                    image_path=frame_path,
+                    spec=asset_spec,
+                    artifact_name=f"validate-{frame_path.stem}",
+                )
+                qa_reports.append(qa_report.artifacts.get("qa", ""))
+                issues.extend(qa_report.issues)
+                warnings.extend(qa_report.warnings)
             except Exception as exc:
                 issues.append(f"Failed to open {frame_path}: {exc}")
         if len(dimensions) > 1:
             issues.append(f"Inconsistent frame dimensions: {sorted(dimensions)}")
 
-        return ToolResult(output=self.Output(valid=not issues, frame_count=len(frame_paths), issues=issues))
+        if not issues and input.smoke_scene_path:
+            screenshot_tool = ScreenshotTool()
+            smoke_output = build_artifact_path(project_path, category="screenshots", name=f"asset-smoke-{Path(input.smoke_scene_path).stem}")
+            shot = await screenshot_tool.execute(
+                screenshot_tool.Input(
+                    scene_path=input.smoke_scene_path,
+                    godot_path=input.godot_path,
+                    project_path=str(project_path),
+                    output_path=str(smoke_output),
+                    artifact_name=f"asset-smoke-{Path(input.smoke_scene_path).stem}",
+                    delay_ms=input.smoke_delay_ms,
+                )
+            )
+            if shot.error:
+                issues.append(f"Asset smoke capture failed: {shot.error}")
+            else:
+                smoke_capture_path = shot.output.image_path
+                smoke_source = "headless"
+                if input.smoke_baseline_id:
+                    baseline = resolve_baseline_path(project_path, input.smoke_baseline_id)
+                    comparison = compare_image_files(
+                        project_root=project_path,
+                        actual_path=Path(smoke_capture_path),
+                        baseline_path=baseline,
+                        tolerance=input.smoke_tolerance,
+                        diff_path=build_artifact_path(project_path, category="diffs", name=input.smoke_baseline_id.replace("/", "-")),
+                        create_baseline=input.create_baseline,
+                    )
+                    baseline_matched = comparison.matched
+                    baseline_path = comparison.baseline_path
+                    diff_path = comparison.diff_path
+                    if not comparison.matched:
+                        issues.append(
+                            f"Smoke baseline mismatch for {input.smoke_baseline_id}: "
+                            f"{comparison.reason or 'visual_diff'}"
+                        )
+                        failure_bundle = str(
+                            write_failure_bundle(
+                                project_path,
+                                test_id=f"asset-smoke-{Path(input.smoke_scene_path).stem}",
+                                payload={
+                                    "test_id": input.smoke_baseline_id or "asset_smoke",
+                                    "scene": input.smoke_scene_path,
+                                    "step": "asset smoke validation",
+                                    "reason": comparison.reason or "visual_diff_exceeded",
+                                    "ui_state": runtime_state_dict(get_runtime_snapshot()),
+                                    "image_assert": comparison.to_dict(),
+                                    "artifacts": {
+                                        "actual": comparison.actual_path,
+                                        "expected": comparison.baseline_path,
+                                        "diff": comparison.diff_path,
+                                    },
+                                },
+                            )
+                        )
+
+        return ToolResult(
+            output=self.Output(
+                valid=not issues,
+                frame_count=len(frame_paths),
+                issues=list(dict.fromkeys(issues)),
+                warnings=list(dict.fromkeys(warnings)),
+                qa_reports=[path for path in qa_reports if path],
+                reimported=reimported,
+                smoke_capture_path=smoke_capture_path,
+                smoke_source=smoke_source,
+                baseline_matched=baseline_matched,
+                baseline_path=baseline_path,
+                diff_path=diff_path,
+                failure_bundle=failure_bundle,
+            )
+        )

@@ -1,0 +1,66 @@
+{
+  "id": "topdown_shooter_pressure",
+  "title": "Top-Down Shooter Pressure",
+  "description": "Check that a top-down shooter encounter escalates pressure while the player continues to output fire.",
+  "genres": ["topdown_shooter"],
+  "testing_focus": ["wave_timing"],
+  "steps": [
+    {
+      "title": "Replay arena pressure route",
+      "action": "scripted_route",
+      "route_segments": [
+        {
+          "press": ["move_right", "fire"],
+          "ticks": 120,
+          "state_updates": {
+            "enemy_bullets": 4,
+            "player_bullets": 12,
+            "enemies_alive": 6,
+            "player_lives": 3
+          },
+          "events": [
+            { "name": "wave_started" }
+          ],
+          "capture_as": "opening"
+        },
+        {
+          "release": ["move_right"],
+          "press": ["move_down"],
+          "ticks": 120,
+          "state_updates": {
+            "enemy_bullets": 15,
+            "player_bullets": 18,
+            "enemies_alive": 4,
+            "player_lives": 3
+          },
+          "events": [
+            { "name": "wave_pressure" }
+          ],
+          "capture_as": "pressure"
+        }
+      ],
+      "expect_events": ["wave_started", "wave_pressure"],
+      "sample_asserts": [
+        {
+          "label": "enemy fire ramps in arena",
+          "left_sample": "pressure",
+          "left_key": "enemy_bullets",
+          "op": ">",
+          "right_sample": "opening",
+          "right_key": "enemy_bullets"
+        },
+        {
+          "label": "player keeps firing under pressure",
+          "left_sample": "pressure",
+          "left_key": "player_bullets",
+          "op": ">",
+          "right_sample": "opening",
+          "right_key": "player_bullets"
+        }
+      ]
+    }
+  ],
+  "source": "manual",
+  "confidence": "medium",
+  "evidence_policy": "require_live_for_pass"
+}

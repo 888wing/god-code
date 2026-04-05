@@ -53,6 +53,22 @@ def test_intent_command_completion_lists_subcommands():
     assert "confirm" in completions
 
 
+def test_quality_and_assetspec_commands_complete():
+    completions = _completion_texts("/")
+    assert "/quality" in completions
+    assert "/assetspec" in completions
+    assert "/playtest " in completions
+    assert "/scenarios" in completions
+    assert "/contracts " in completions
+
+
+def test_playtest_and_contract_command_completion_lists_subcommands():
+    assert "relevant" in _completion_texts("/playtest ")
+    assert "all" in _completion_texts("/playtest ")
+    assert "relevant" in _completion_texts("/contracts ")
+    assert "all" in _completion_texts("/contracts ")
+
+
 def test_provider_completion_handles_trailing_space_without_crashing():
     completions = _completion_texts("/provider ")
     assert "anthropic" in completions

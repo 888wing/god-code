@@ -96,6 +96,11 @@ class CommandCompleter(Completer):
         ("/effort ", "show or switch reasoning effort"),
         ("/skills ", "list or override internal skills"),
         ("/intent ", "show or confirm gameplay intent"),
+        ("/quality", "show the current project quality target"),
+        ("/assetspec", "show the current asset constraints"),
+        ("/playtest ", "run scripted or profile-selected playtests"),
+        ("/scenarios", "list built-in playtest scenarios"),
+        ("/contracts ", "show scripted-route scenario contracts"),
         ("/info", "show project details"),
         ("/status", "show provider, model, and auth"),
         ("/usage", "show token usage"),
@@ -186,6 +191,26 @@ class CommandCompleter(Completer):
                 ("confirm", "persist the current inferred profile"),
                 ("edit", "open guided gameplay intent questions"),
                 ("clear", "clear the confirmed gameplay intent"),
+            ):
+                if value.startswith(prefix.lower()):
+                    yield Completion(value, start_position=-len(prefix), display_meta=desc)
+            return
+
+        if text.startswith("/playtest "):
+            prefix = _suffix_after_first_space(text)
+            for value, desc in (
+                ("relevant", "run profile-selected scripted scenarios"),
+                ("all", "run all scripted scenarios for the current profile"),
+            ):
+                if value.startswith(prefix.lower()):
+                    yield Completion(value, start_position=-len(prefix), display_meta=desc)
+            return
+
+        if text.startswith("/contracts "):
+            prefix = _suffix_after_first_space(text)
+            for value, desc in (
+                ("relevant", "show contracts for the current profile"),
+                ("all", "show all built-in contracts"),
             ):
                 if value.startswith(prefix.lower()):
                     yield Completion(value, start_position=-len(prefix), display_meta=desc)

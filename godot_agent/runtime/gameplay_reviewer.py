@@ -6,8 +6,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from godot_agent.godot.impact_analysis import ImpactAnalysisReport
-from godot_agent.runtime.design_memory import DesignMemory
+from godot_agent.runtime.design_memory import DesignMemory, GameplayIntentProfile
 from godot_agent.runtime.playtest_harness import PlaytestReport, format_playtest_report
+from godot_agent.runtime.polish_rubric import evaluate_demo_polish
 from godot_agent.runtime.runtime_bridge import RuntimeSnapshot, format_runtime_snapshot
 
 
@@ -27,7 +28,7 @@ class GameplayReviewReport:
         statuses = {check.status for check in self.checks}
         if "FAIL" in statuses:
             return "FAIL"
-        if "PARTIAL" in statuses:
+        if "PARTIAL" in statuses or "WARN" in statuses:
             return "PARTIAL"
         return "PASS"
 
@@ -37,6 +38,7 @@ def review_gameplay_constraints(
     project_root: Path,
     changed_files: set[str],
     design_memory: DesignMemory,
+    intent_profile: GameplayIntentProfile | None,
     impact_report: ImpactAnalysisReport | None,
     runtime_snapshot: RuntimeSnapshot | None,
     playtest_report: PlaytestReport | None,
@@ -139,5 +141,22 @@ def review_gameplay_constraints(
                     status="PARTIAL",
                 )
             )
+
+    polish_report = evaluate_demo_polish(
+        project_root=project_root,
+        changed_files=changed_files,
+        design_memory=design_memory,
+        intent_profile=intent_profile or design_memory.gameplay_intent,
+        runtime_snapshot=runtime_snapshot,
+        playtest_report=playtest_report,
+    )
+    for check in polish_report.checks:
+        report.checks.append(
+            GameplayCheck(
+                description=check.description,
+                observed_output=check.observed_output,
+                status=check.status,
+            )
+        )
 
     return report

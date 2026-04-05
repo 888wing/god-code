@@ -8,6 +8,7 @@ from pathlib import Path
 from godot_agent.godot.impact_analysis import ImpactAnalysisReport, format_impact_report
 from godot_agent.godot.project import parse_project_godot
 from godot_agent.prompts.build_discipline import BUILD_DISCIPLINE_PROMPT
+from godot_agent.prompts.genre_templates import format_genre_template
 from godot_agent.prompts.knowledge_selector import format_knowledge_injection, select_sections
 from godot_agent.prompts.skill_selector import format_skill_injection, resolve_skills
 from godot_agent.runtime.design_memory import DesignMemory, format_design_memory
@@ -105,6 +106,9 @@ class PromptAssembler:
             sections.append(format_design_memory(design_memory))
         if intent_profile is not None and not intent_profile.is_empty:
             sections.append(format_gameplay_intent(intent_profile))
+            template_text = format_genre_template(intent_profile)
+            if template_text:
+                sections.append(template_text)
 
         if impact_report is not None:
             sections.append(format_impact_report(impact_report))

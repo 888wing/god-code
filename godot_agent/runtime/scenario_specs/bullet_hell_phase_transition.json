@@ -1,0 +1,74 @@
+{
+  "id": "bullet_hell_phase_transition",
+  "title": "Bullet Hell Boss Phase Transition",
+  "description": "Check that boss phases transition cleanly and clear bullets when the encounter design requires it.",
+  "genres": ["bullet_hell"],
+  "testing_focus": ["boss_phase_clear"],
+  "required_events": ["boss_phase_changed"],
+  "steps": [
+    {
+      "title": "Replay boss phase transition route",
+      "action": "scripted_route",
+      "route_segments": [
+        {
+          "press": ["fire"],
+          "ticks": 120,
+          "state_updates": {
+            "enemy_bullets": 14,
+            "boss_phase": 1
+          },
+          "events": [
+            { "name": "boss_phase_changed", "payload": "phase_1" }
+          ],
+          "capture_as": "before_clear"
+        },
+        {
+          "ticks": 30,
+          "state_updates": {
+            "enemy_bullets": 0,
+            "boss_phase": 2
+          },
+          "events": [
+            { "name": "boss_transition_cleared" },
+            { "name": "boss_phase_changed", "payload": "phase_2" }
+          ],
+          "capture_as": "after_clear"
+        }
+      ],
+      "expect_events": ["boss_phase_changed", "boss_transition_cleared"],
+      "sample_asserts": [
+        {
+          "label": "transition clears enemy bullets",
+          "left_sample": "after_clear",
+          "left_key": "enemy_bullets",
+          "op": "==",
+          "value": 0
+        },
+        {
+          "label": "transition reduces bullet pressure",
+          "left_sample": "before_clear",
+          "left_key": "enemy_bullets",
+          "op": ">",
+          "right_sample": "after_clear",
+          "right_key": "enemy_bullets"
+        },
+        {
+          "label": "phase index advances",
+          "left_sample": "after_clear",
+          "left_key": "boss_phase",
+          "op": ">",
+          "right_sample": "before_clear",
+          "right_key": "boss_phase"
+        }
+      ]
+    }
+  ],
+  "source": "manual",
+  "confidence": "high",
+  "authoritative_assertions": [
+    "boss_phase_1_reached",
+    "boss_phase_2_reached",
+    "boss_transitions_clear_bullets"
+  ],
+  "evidence_policy": "require_live_for_pass"
+}

@@ -34,7 +34,7 @@ class ReadDesignMemoryTool(BaseTool):
         if err:
             return ToolResult(error=err)
         memory = load_design_memory(project_path)
-        return ToolResult(output=self.Output(report=format_design_memory(memory), memory=memory.__dict__))
+        return ToolResult(output=self.Output(report=format_design_memory(memory), memory=memory.to_dict()))
 
 
 class UpdateDesignMemoryTool(BaseTool):
@@ -43,7 +43,7 @@ class UpdateDesignMemoryTool(BaseTool):
 
     class Input(BaseModel):
         project_path: str = Field(description="Absolute path to the Godot project root")
-        section: str = Field(description="Section name, e.g. pillars, gameplay_intent, scene_ownership, mechanic_notes:combat")
+        section: str = Field(description="Section name, e.g. pillars, gameplay_intent, quality_target, asset_spec, polish_profile, scene_ownership, mechanic_notes:combat")
         text: str = Field(default="", description="Freeform text value for scalar sections")
         items: list[str] = Field(default_factory=list, description="List values for list sections")
         mapping: dict[str, Any] = Field(default_factory=dict, description="Mapping values for dict sections")
@@ -76,4 +76,4 @@ class UpdateDesignMemoryTool(BaseTool):
             )
         except ValueError as exc:
             return ToolResult(error=str(exc))
-        return ToolResult(output=self.Output(report=format_design_memory(memory), memory=memory.__dict__))
+        return ToolResult(output=self.Output(report=format_design_memory(memory), memory=memory.to_dict()))

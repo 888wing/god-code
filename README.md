@@ -41,7 +41,7 @@ The project is aimed at developers building **original Godot games**, not just t
 - **Validation and review**
   project validation, GDScript linting, scene/resource consistency, dependency graph, impact analysis, reviewer and gameplay reviewer stages
 - **Runtime and playtest tooling**
-  runtime snapshot bridge, profile-aware playtest harness, viewport capture, baseline comparison, failure bundle reporting
+  runtime snapshot bridge, profile-aware playtest harness, scripted-route combat contracts, scenario/contract listing, viewport capture, baseline comparison, failure bundle reporting
 - **Gameplay-intent system**
   genre/combat/enemy-profile inference, `/intent` commands, persistent design-memory intent storage, profile-aware skill routing
 - **Asset helpers**
@@ -103,6 +103,9 @@ Once inside chat, use:
 - `/provider` to switch provider
 - `/model` to switch model
 - `/intent` to inspect or confirm gameplay direction
+- `/playtest` to run scripted gameplay contracts
+- `/scenarios` to list built-in scenario packs
+- `/contracts` to inspect scripted-route contract details
 - `/settings` to edit all config fields
 - `/resume` to restore a saved session
 - `"""` to start multiline input
@@ -201,6 +204,12 @@ First-class genre support currently targets:
 - `topdown_shooter`
 - `platformer_enemy`
 - `tower_defense`
+
+The built-in playtest packs now include scripted-route contracts for:
+
+- `bullet_hell`
+- `topdown_shooter`
+- `platformer_enemy`
 
 For these genres, God Code is intended to infer a stable gameplay profile, route to matching internal skills, and steer enemy/combat work toward the correct architecture.
 

@@ -1,0 +1,79 @@
+{
+  "id": "bullet_hell_wave_progression",
+  "title": "Bullet Hell Wave Progression",
+  "description": "Check that a bullet-hell encounter exposes readable wave escalation instead of a flat enemy script loop.",
+  "genres": ["bullet_hell"],
+  "testing_focus": ["wave_timing"],
+  "required_events": ["wave_started"],
+  "required_inputs": ["move_left", "move_right"],
+  "steps": [
+    {
+      "title": "Replay wave escalation route",
+      "action": "scripted_route",
+      "route_segments": [
+        {
+          "press": ["move_right", "fire"],
+          "ticks": 180,
+          "state_updates": {
+            "enemy_bullets": 8,
+            "enemies_alive": 10,
+            "player_lives": 3,
+            "player_bullets": 16
+          },
+          "events": [
+            { "name": "wave_started" }
+          ],
+          "capture_as": "sample_a"
+        },
+        {
+          "release": ["move_right"],
+          "press": ["move_left"],
+          "ticks": 180,
+          "state_updates": {
+            "enemy_bullets": 30,
+            "enemies_alive": 4,
+            "player_lives": 3,
+            "player_bullets": 22
+          },
+          "events": [
+            { "name": "wave_pressure" }
+          ],
+          "capture_as": "sample_b"
+        }
+      ],
+      "expect_events": ["wave_started", "wave_pressure"],
+      "sample_asserts": [
+        {
+          "label": "enemy bullet pressure ramps",
+          "left_sample": "sample_b",
+          "left_key": "enemy_bullets",
+          "op": ">",
+          "right_sample": "sample_a",
+          "right_key": "enemy_bullets"
+        },
+        {
+          "label": "enemy count compresses over route",
+          "left_sample": "sample_b",
+          "left_key": "enemies_alive",
+          "op": "<",
+          "right_sample": "sample_a",
+          "right_key": "enemies_alive"
+        },
+        {
+          "label": "player survives escalation",
+          "left_sample": "sample_b",
+          "left_key": "player_lives",
+          "op": ">=",
+          "value": 1
+        }
+      ]
+    }
+  ],
+  "source": "manual",
+  "confidence": "high",
+  "authoritative_assertions": [
+    "wave_enemy_density_ramps",
+    "wave_player_survives_scripted_route"
+  ],
+  "evidence_policy": "require_live_for_pass"
+}

@@ -1,0 +1,62 @@
+{
+  "id": "platformer_enemy_patrol_response",
+  "title": "Platformer Enemy Patrol Response",
+  "description": "Check that a platformer enemy patrol escalates into a readable response loop without breaking player survivability.",
+  "genres": ["platformer_enemy"],
+  "testing_focus": ["wave_timing"],
+  "steps": [
+    {
+      "title": "Replay patrol response route",
+      "action": "scripted_route",
+      "route_segments": [
+        {
+          "press": ["move_right"],
+          "ticks": 90,
+          "state_updates": {
+            "enemies_alive": 2,
+            "player_lives": 3,
+            "enemy_bullets": 0
+          },
+          "events": [
+            { "name": "enemy_patrol_started" }
+          ],
+          "capture_as": "patrol"
+        },
+        {
+          "press": ["jump"],
+          "ticks": 60,
+          "state_updates": {
+            "enemies_alive": 1,
+            "player_lives": 3,
+            "enemy_bullets": 0
+          },
+          "events": [
+            { "name": "enemy_defeated" }
+          ],
+          "capture_as": "stomp"
+        }
+      ],
+      "expect_events": ["enemy_patrol_started", "enemy_defeated"],
+      "sample_asserts": [
+        {
+          "label": "stomp removes one patrol threat",
+          "left_sample": "patrol",
+          "left_key": "enemies_alive",
+          "op": ">",
+          "right_sample": "stomp",
+          "right_key": "enemies_alive"
+        },
+        {
+          "label": "player keeps lives through stomp route",
+          "left_sample": "stomp",
+          "left_key": "player_lives",
+          "op": ">=",
+          "value": 1
+        }
+      ]
+    }
+  ],
+  "source": "manual",
+  "confidence": "medium",
+  "evidence_policy": "require_live_for_pass"
+}

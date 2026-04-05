@@ -1,10 +1,15 @@
 import pytest
 from godot_agent.tools.godot_cli import (
+    build_import_command,
     parse_godot_output,
     GodotOutputReport,
+    GodotCommandResult,
     build_gut_command,
     build_screenshot_script,
+    resolve_godot_path,
+    run_godot_import,
 )
+from godot_agent.runtime.config import AgentConfig
 
 
 class TestParseGodotOutput:
@@ -49,6 +54,13 @@ ERROR: res://data/cards.json - Parse error
         report = parse_godot_output(output)
         assert report.raw_output == output
 
+    def test_parse_ansi_wrapped_error(self):
+        output = "\x1b[1;31mERROR:\x1b[0;91m res://assets/sprites/player.png - Missing resource\n"
+        report = parse_godot_output(output)
+        assert len(report.errors) == 1
+        assert report.errors[0].file == "res://assets/sprites/player.png"
+        assert report.errors[0].message == "Missing resource"
+
     def test_empty_output(self):
         report = parse_godot_output("")
         assert len(report.errors) == 0
@@ -84,6 +96,25 @@ class TestBuildGutCommand:
     def test_gexit_flag_present(self):
         cmd = build_gut_command()
         assert "-gexit" in cmd
+
+
+class TestBuildImportCommand:
+    def test_default_import_command(self):
+        cmd = build_import_command()
+        assert cmd == ["godot", "--import", "--quit"]
+
+    def test_custom_import_command(self):
+        cmd = build_import_command("/Applications/Godot")
+        assert cmd == ["/Applications/Godot", "--import", "--quit"]
+
+
+def test_resolve_godot_path_prefers_configured_path(monkeypatch):
+    monkeypatch.setattr(
+        "godot_agent.tools.godot_cli.load_config",
+        lambda path: AgentConfig(godot_path="/Applications/Godot.app/Contents/MacOS/Godot"),
+    )
+
+    assert resolve_godot_path("godot") == "/Applications/Godot.app/Contents/MacOS/Godot"
 
 
 class TestBuildScreenshotScript:
@@ -125,3 +156,63 @@ class TestBuildScreenshotScript:
             output_path="/tmp/out.png",
         )
         assert "quit()" in script
+
+    def test_uses_deferred_capture(self):
+        script = build_screenshot_script(
+            scene_path="res://scenes/test.tscn",
+            output_path="/tmp/out.png",
+        )
+        assert 'call_deferred("_capture")' in script
+        assert "func _capture() -> void:" in script
+
+    def test_waits_for_renderable_frame(self):
+        script = build_screenshot_script(
+            scene_path="res://scenes/test.tscn",
+            output_path="/tmp/out.png",
+        )
+        assert "await process_frame" in script
+        assert "texture = root.get_viewport().get_texture()" in script
+
+    def test_handles_load_failure(self):
+        script = build_screenshot_script(
+            scene_path="res://missing_scene.tscn",
+            output_path="/tmp/out.png",
+        )
+        assert 'push_error("Failed to load scene: res://missing_scene.tscn")' in script
+        assert "quit(1)" in script
+
+    def test_handles_missing_viewport_texture(self):
+        script = build_screenshot_script(
+            scene_path="res://scenes/test.tscn",
+            output_path="/tmp/out.png",
+        )
+        assert "Viewport texture is unavailable" in script
+        assert "quit(2)" in script
+
+
+@pytest.mark.asyncio
+async def test_run_godot_import_uses_import_command(monkeypatch, tmp_path):
+    class _DummyProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"import ok\n", b""
+
+    calls = []
+
+    async def fake_exec(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _DummyProcess()
+
+    monkeypatch.setattr(
+        "godot_agent.tools.godot_cli.asyncio.create_subprocess_exec",
+        fake_exec,
+    )
+
+    result = await run_godot_import(tmp_path, godot_path="/Applications/Godot")
+
+    assert isinstance(result, GodotCommandResult)
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "import ok"
+    assert calls[0][0] == ("/Applications/Godot", "--import", "--quit")
+    assert calls[0][1]["cwd"] == str(tmp_path)

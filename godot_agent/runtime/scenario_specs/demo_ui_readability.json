@@ -1,0 +1,10 @@
+{
+  "id": "demo_ui_readability",
+  "title": "Demo UI Readability",
+  "description": "Check that HUD and menu readability remain credible under the current quality target.",
+  "quality_targets": ["demo"],
+  "path_contains": ["ui", "hud", "menu", "dialog"],
+  "source": "manual",
+  "confidence": "medium",
+  "evidence_policy": "require_live_for_pass"
+}

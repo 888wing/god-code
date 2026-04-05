@@ -14,12 +14,12 @@ from godot_agent.godot.resource_validator import validate_resources
 from godot_agent.godot.scene_parser import parse_tscn
 from godot_agent.godot.tscn_validator import validate_tscn
 from godot_agent.godot.ui_layout_advisor import validate_ui_layout
-from godot_agent.runtime.design_memory import DesignMemory, load_design_memory
+from godot_agent.runtime.design_memory import DesignMemory, GameplayIntentProfile, load_design_memory
 from godot_agent.runtime.error_loop import format_validation_for_llm, validate_project
 from godot_agent.runtime.gameplay_reviewer import review_gameplay_constraints
 from godot_agent.runtime.playtest_harness import PlaytestReport, run_playtest_harness
 from godot_agent.runtime.quality_gate import QualityGateReport
-from godot_agent.runtime.runtime_bridge import RuntimeSnapshot, get_runtime_snapshot
+from godot_agent.runtime.runtime_bridge import RuntimeSnapshot
 
 
 @dataclass
@@ -39,7 +39,7 @@ class ReviewReport:
         statuses = {check.status for check in self.checks}
         if "FAIL" in statuses:
             return "FAIL"
-        if "PARTIAL" in statuses:
+        if "PARTIAL" in statuses or "WARN" in statuses:
             return "PARTIAL"
         return "PASS"
 
@@ -73,6 +73,7 @@ async def review_changes(
     godot_path: str,
     quality_report: QualityGateReport | None = None,
     design_memory: DesignMemory | None = None,
+    intent_profile: GameplayIntentProfile | None = None,
     impact_report: ImpactAnalysisReport | None = None,
     runtime_snapshot: RuntimeSnapshot | None = None,
     playtest_report: PlaytestReport | None = None,
@@ -213,30 +214,39 @@ async def review_changes(
     )
 
     design_memory = design_memory or load_design_memory(project_root)
-    runtime_snapshot = runtime_snapshot or get_runtime_snapshot()
-    if playtest_report is None and runtime_snapshot is not None:
-        playtest_report = run_playtest_harness(
+    runtime_snapshot = runtime_snapshot
+    should_run_gameplay_review = (
+        not design_memory.is_empty
+        or runtime_snapshot is not None
+        or playtest_report is not None
+        or (intent_profile is not None and not intent_profile.is_empty)
+    )
+    if should_run_gameplay_review:
+        if playtest_report is None and runtime_snapshot is not None:
+            playtest_report = run_playtest_harness(
+                project_root=project_root,
+                changed_files=changed_files,
+                impact_report=impact_report,
+                runtime_snapshot=runtime_snapshot,
+                design_memory=design_memory,
+            )
+        gameplay_report = review_gameplay_constraints(
             project_root=project_root,
             changed_files=changed_files,
+            design_memory=design_memory,
+            intent_profile=intent_profile or design_memory.gameplay_intent,
             impact_report=impact_report,
             runtime_snapshot=runtime_snapshot,
+            playtest_report=playtest_report,
         )
-    gameplay_report = review_gameplay_constraints(
-        project_root=project_root,
-        changed_files=changed_files,
-        design_memory=design_memory,
-        impact_report=impact_report,
-        runtime_snapshot=runtime_snapshot,
-        playtest_report=playtest_report,
-    )
-    for check in gameplay_report.checks:
-        _append(
-            report,
-            check.description,
-            "gameplay_review",
-            check.observed_output,
-            check.status,
-        )
+        for check in gameplay_report.checks:
+            _append(
+                report,
+                check.description,
+                "gameplay_review",
+                check.observed_output,
+                check.status,
+            )
 
     return report
 

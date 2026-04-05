@@ -25,7 +25,15 @@ from godot_agent.prompts.skill_selector import (
     skill_label,
 )
 from godot_agent.runtime.config import AgentConfig, default_config_path, load_config
-from godot_agent.runtime.design_memory import GameplayIntentProfile, load_design_memory, update_design_memory
+from godot_agent.runtime.design_memory import (
+    gameplay_intent_from_data,
+    GameplayIntentProfile,
+    load_design_memory,
+    resolved_asset_spec,
+    resolved_polish_profile,
+    resolved_quality_target,
+    update_design_memory,
+)
 from godot_agent.runtime.engine import ConversationEngine
 from godot_agent.runtime.intent_resolver import (
     apply_intent_answers,
@@ -52,7 +60,13 @@ from godot_agent.tools.analysis_tools import (
     ValidateUILayoutTool,
     ValidateProjectTool,
 )
-from godot_agent.tools.editor_bridge import GetRuntimeSnapshotTool, RunPlaytestTool
+from godot_agent.tools.editor_bridge import (
+    GetRuntimeSnapshotTool,
+    ListContractsTool,
+    ListScenariosTool,
+    RunPlaytestTool,
+    RunScriptedPlaytestTool,
+)
 from godot_agent.tools.image_gen import GenerateSpriteTool
 from godot_agent.tools.runtime_harness import (
     AdvanceTicksTool,
@@ -354,6 +368,11 @@ def _main_menu_options() -> list[MenuOption]:
         MenuOption("effort", "Set reasoning effort", "Adjust reasoning depth."),
         MenuOption("skills", "Manage skills", "Inspect or override the internal domain skills."),
         MenuOption("intent", "Gameplay intent", "Inspect or confirm gameplay direction."),
+        MenuOption("quality", "Quality target", "Show whether the project is targeting prototype or demo output."),
+        MenuOption("assetspec", "Asset spec", "Show current sprite and asset acceptance constraints."),
+        MenuOption("playtest", "Run playtest", "Run scripted playtest contracts for the current project."),
+        MenuOption("scenarios", "List scenarios", "Show built-in playtest scenarios and relevance."),
+        MenuOption("contracts", "Show contracts", "Inspect scripted-route contract details."),
         MenuOption("resume", "Resume session", "Choose a saved session to restore."),
         MenuOption("cd", "Change project directory", "Switch the active project root."),
         MenuOption("set", "Edit setting", "Choose any config field and update it."),
@@ -464,7 +483,7 @@ def build_registry() -> ToolRegistry:
         ValidateProjectTool, CheckConsistencyTool, ProjectDependencyGraphTool, AnalyzeImpactTool,
         PlanUILayoutTool, ValidateUILayoutTool, ScaffoldAudioTool, ValidateAudioNodesTool,
         ReadDesignMemoryTool, UpdateDesignMemoryTool,
-        GetRuntimeSnapshotTool, RunPlaytestTool,
+        GetRuntimeSnapshotTool, RunPlaytestTool, RunScriptedPlaytestTool, ListScenariosTool, ListContractsTool,
         LoadSceneTool, SetFixtureTool, PressActionTool, AdvanceTicksTool,
         GetRuntimeStateTool, GetEventsSinceTool, CaptureViewportTool,
         CompareBaselineTool, ReportFailureTool,
@@ -568,7 +587,13 @@ def _project_details(project_root: Path) -> tuple[bool, str | None, dict[str, st
     return True, proj.name, info
 
 
-def _toolbar_markup(cfg: AgentConfig, project_root: Path, project_name: str | None, intent_genre: str = "-") -> str:
+def _toolbar_markup(
+    cfg: AgentConfig,
+    project_root: Path,
+    project_name: str | None,
+    intent_genre: str = "-",
+    quality_target: str = "prototype",
+) -> str:
     mode_label = html.escape(get_mode_spec(cfg.mode).label)
     provider = html.escape(cfg.provider)
     model = html.escape(cfg.model)
@@ -576,6 +601,7 @@ def _toolbar_markup(cfg: AgentConfig, project_root: Path, project_name: str | No
     skill_mode = html.escape(cfg.skill_mode)
     project = html.escape(project_name or project_root.name or str(project_root))
     intent = html.escape(intent_genre or "-")
+    quality = html.escape(quality_target or "prototype")
     return (
         f"<b>mode</b>: {mode_label} | "
         f"<b>provider</b>: {provider} | "
@@ -583,6 +609,7 @@ def _toolbar_markup(cfg: AgentConfig, project_root: Path, project_name: str | No
         f"<b>effort</b>: {effort} | "
         f"<b>skills</b>: {skill_mode} | "
         f"<b>intent</b>: {intent} | "
+        f"<b>quality</b>: {quality} | "
         f"<b>project</b>: {project} | "
         "<b>triple quotes</b>: multiline | "
         "<b>/help</b>"
@@ -609,6 +636,21 @@ def _format_skill_list(skill_keys: list[str]) -> str:
 
 def _intent_profile_dict(engine: ConversationEngine) -> dict[str, object]:
     return engine.intent_profile.to_dict()
+
+
+def _quality_target(engine: ConversationEngine) -> str:
+    memory = getattr(engine, "design_memory", None)
+    return resolved_quality_target(memory)
+
+
+def _asset_spec_dict(engine: ConversationEngine) -> dict[str, object]:
+    memory = getattr(engine, "design_memory", None)
+    return resolved_asset_spec(memory).to_dict()
+
+
+def _polish_profile_dict(engine: ConversationEngine) -> dict[str, object]:
+    memory = getattr(engine, "design_memory", None)
+    return resolved_polish_profile(memory, quality_target=_quality_target(engine)).to_dict()
 
 
 def _format_intent_inline(profile: dict[str, object]) -> str:
@@ -905,10 +947,16 @@ def status():
         click.secho("Auth:     Not configured. Run 'god-code setup'.", fg="yellow")
     project_root = Path.cwd()
     if (project_root / "project.godot").exists():
-        intent = resolve_gameplay_intent(project_root, design_memory=load_design_memory(project_root))
+        memory = load_design_memory(project_root)
+        intent = resolve_gameplay_intent(project_root, design_memory=memory)
         click.echo(f"Intent:   {_format_intent_inline(intent.to_dict())}")
         conflicts = ", ".join(intent.conflicts) if intent.conflicts else "-"
         click.echo(f"Conflict: {conflicts}")
+        click.echo(f"Quality:  {resolved_quality_target(memory)}")
+        asset_spec = resolved_asset_spec(memory)
+        if not asset_spec.is_empty:
+            size = f"{asset_spec.target_size[0]}x{asset_spec.target_size[1] if len(asset_spec.target_size) > 1 else asset_spec.target_size[0]}" if asset_spec.target_size else "-"
+            click.echo(f"Assets:   {asset_spec.style or '-'} | {size} | {asset_spec.background_key or '-'}")
 
 
 @main.command()
@@ -948,6 +996,8 @@ def ask(prompt: str, project: str, config: str | None, image: tuple[str, ...], p
             enabled_skills=cfg.enabled_skills,
             disabled_skills=cfg.disabled_skills,
             intent_profile=_intent_profile_dict(engine),
+            quality_target=_quality_target(engine),
+            asset_spec=_asset_spec_dict(engine),
         )
         display.update_project_info(project_info)
         _wire_engine_callbacks(engine, display, cfg)
@@ -1022,6 +1072,8 @@ def chat(project: str = ".", config: str | None = None):
         enabled_skills=cfg.enabled_skills,
         disabled_skills=cfg.disabled_skills,
         intent_profile=_intent_profile_dict(engine),
+        quality_target=_quality_target(engine),
+        asset_spec=_asset_spec_dict(engine),
     )
     if not has_project:
         display.no_project_warning()
@@ -1069,6 +1121,8 @@ def chat(project: str = ".", config: str | None = None):
             enabled_skills=cfg.enabled_skills,
             disabled_skills=cfg.disabled_skills,
             intent_profile=_intent_profile_dict(engine),
+            quality_target=_quality_target(engine),
+            asset_spec=_asset_spec_dict(engine),
         )
         display.workspace_snapshot(show_commands=show_commands)
 
@@ -1124,12 +1178,18 @@ def chat(project: str = ".", config: str | None = None):
             enabled_skills=cfg.enabled_skills,
             disabled_skills=cfg.disabled_skills,
             intent_profile=_intent_profile_dict(engine),
+            quality_target=_quality_target(engine),
+            asset_spec=_asset_spec_dict(engine),
         )
         if not has_project:
             display.no_project_warning()
 
     def _intent_status_data() -> dict[str, object]:
         profile = _intent_profile_dict(engine)
+        combat_profile = profile.get("combat_profile") or {}
+        asset_spec = _asset_spec_dict(engine)
+        target_size = asset_spec.get("target_size") or []
+        size_label = f"{target_size[0]}x{target_size[1] if len(target_size) > 1 else target_size[0]}" if target_size else "-"
         return {
             "Gameplay Intent": _format_intent_inline(profile),
             "Genre": profile.get("genre", "-") or "-",
@@ -1137,14 +1197,34 @@ def chat(project: str = ".", config: str | None = None):
             "Combat": profile.get("combat_model", "-") or "-",
             "Enemy Model": profile.get("enemy_model", "-") or "-",
             "Boss Model": profile.get("boss_model", "-") or "-",
+            "Combat Profile": ", ".join(
+                filter(
+                    None,
+                    [
+                        str(combat_profile.get("player_space_model", "") or ""),
+                        str(combat_profile.get("density_curve", "") or ""),
+                        str(combat_profile.get("readability_target", "") or ""),
+                    ],
+                )
+            )
+            or "-",
             "Testing Focus": ", ".join(profile.get("testing_focus") or []) or "-",
             "Intent Confirmed": "yes" if profile.get("confirmed") else "no",
             "Intent Confidence": f"{float(profile.get('confidence', 0.0) or 0.0):.2f}",
             "Intent Conflicts": ", ".join(profile.get("conflicts") or []) or "-",
+            "Quality Target": _quality_target(engine),
+            "Asset Style": asset_spec.get("style", "-") or "-",
+            "Asset Size": size_label,
         }
 
     def _toolbar() -> str:
-        return _toolbar_markup(cfg, project_root, proj_name, str(_intent_profile_dict(engine).get("genre", "-") or "-"))
+        return _toolbar_markup(
+            cfg,
+            project_root,
+            proj_name,
+            str(_intent_profile_dict(engine).get("genre", "-") or "-"),
+            _quality_target(engine),
+        )
 
     async def _prompt_menu_choice(
         title: str,
@@ -1369,7 +1449,7 @@ def chat(project: str = ".", config: str | None = None):
             return False
 
         if record.gameplay_intent:
-            _persist_intent_profile(resume_root, GameplayIntentProfile(**record.gameplay_intent))
+            _persist_intent_profile(resume_root, gameplay_intent_from_data(record.gameplay_intent))
 
         loaded_messages = record.messages[1:] if record.messages and record.messages[0].role == "system" else record.messages
         await _replace_engine(
@@ -1431,6 +1511,68 @@ def chat(project: str = ".", config: str | None = None):
         display.intent_panel(_intent_profile_dict(engine))
         return True
 
+    async def _show_quality_panel() -> bool:
+        display.quality_panel(_quality_target(engine), _polish_profile_dict(engine))
+        return True
+
+    async def _show_asset_spec_panel() -> bool:
+        display.asset_spec_panel(_asset_spec_dict(engine))
+        return True
+
+    async def _show_scenarios_panel(*, include_generated: bool = False) -> bool:
+        tool = ListScenariosTool()
+        result = await tool.execute(tool.Input(project_path=str(project_root), include_generated=include_generated))
+        if result.error:
+            display.error(result.error)
+            return False
+        display.scenarios_panel(result.output.scenarios, result.output.quality_target)
+        return True
+
+    async def _show_contracts_panel(selection: str = "") -> bool:
+        normalized = selection.strip().lower()
+        include_generated = normalized == "all"
+        scenario_id = "" if normalized in {"", "relevant", "all"} else selection.strip()
+        tool = ListContractsTool()
+        result = await tool.execute(
+            tool.Input(
+                project_path=str(project_root),
+                scenario_id=scenario_id,
+                include_generated=include_generated,
+                show_all=normalized == "all",
+            )
+        )
+        if result.error:
+            display.error(result.error)
+            return False
+        display.contracts_panel(result.output.contracts, result.output.quality_target)
+        return True
+
+    async def _run_scripted_playtest_command(selection: str = "") -> bool:
+        raw = selection.strip()
+        scenario_ids: list[str] = []
+        if raw and raw.lower() not in {"relevant", "all"}:
+            scenario_ids = [item.strip() for item in raw.split(",") if item.strip()]
+        tool = RunScriptedPlaytestTool()
+        changed_files = [str(path) for path in getattr(engine, "recent_changed_files", [])] if getattr(engine, "recent_changed_files", None) else []
+        result = await tool.execute(
+            tool.Input(
+                project_path=str(project_root),
+                scenario_ids=scenario_ids,
+                changed_files=changed_files,
+                run_all=raw.lower() == "all",
+            )
+        )
+        if result.error:
+            display.error(result.error)
+            return False
+        display.playtest_panel(
+            verdict=result.output.verdict,
+            gameplay_review_verdict=result.output.gameplay_review_verdict,
+            report=result.output.report,
+            scenarios=result.output.scenarios,
+        )
+        return True
+
     async def _edit_intent_profile(*, checkpoint: bool = False) -> bool:
         nonlocal intent_checkpoint_dismissed
         if not has_project:
@@ -1481,7 +1623,7 @@ def chat(project: str = ".", config: str | None = None):
             if profile.is_empty:
                 display.error("No gameplay intent could be inferred yet.")
                 return False
-            updated = GameplayIntentProfile(**profile.to_dict())
+            updated = gameplay_intent_from_data(profile.to_dict())
             updated.confirmed = True
             updated.confidence = 1.0
             _persist_intent_profile(project_root, updated)
@@ -1666,6 +1808,21 @@ def chat(project: str = ".", config: str | None = None):
             return "handled"
         if choice == "intent":
             await _show_intent_panel()
+            return "handled"
+        if choice == "quality":
+            await _show_quality_panel()
+            return "handled"
+        if choice == "assetspec":
+            await _show_asset_spec_panel()
+            return "handled"
+        if choice == "playtest":
+            await _run_scripted_playtest_command("relevant")
+            return "handled"
+        if choice == "scenarios":
+            await _show_scenarios_panel()
+            return "handled"
+        if choice == "contracts":
+            await _show_contracts_panel("relevant")
             return "handled"
         if choice == "resume":
             await _show_resume_menu()
@@ -1877,6 +2034,34 @@ def chat(project: str = ".", config: str | None = None):
                     continue
                 if intent_arg is not None:
                     await _apply_intent_command(intent_arg or "status")
+                    continue
+
+                if cmd == "/quality":
+                    await _show_quality_panel()
+                    continue
+
+                if cmd == "/assetspec":
+                    await _show_asset_spec_panel()
+                    continue
+
+                if cmd == "/scenarios":
+                    await _show_scenarios_panel()
+                    continue
+
+                playtest_arg = _command_argument(user_input, "/playtest")
+                if cmd == "/playtest":
+                    await _run_scripted_playtest_command("relevant")
+                    continue
+                if playtest_arg is not None:
+                    await _run_scripted_playtest_command(playtest_arg)
+                    continue
+
+                contracts_arg = _command_argument(user_input, "/contracts")
+                if cmd == "/contracts":
+                    await _show_contracts_panel("relevant")
+                    continue
+                if contracts_arg is not None:
+                    await _show_contracts_panel(contracts_arg)
                     continue
 
                 if cmd == "/usage":

@@ -236,7 +236,7 @@ def write_scene(file_path: str, content: str) -> dict:
 
 @mcp.tool()
 def add_scene_node(file_path: str, parent: str, name: str, node_type: str,
-                   properties: dict[str, str] | None = None) -> dict:
+                   properties: dict[str, object] | None = None) -> dict:
     """Add a node to an existing .tscn scene file.
 
     Args:
@@ -257,7 +257,7 @@ def add_scene_node(file_path: str, parent: str, name: str, node_type: str,
 
 
 @mcp.tool()
-def set_scene_property(file_path: str, node_name: str, key: str, value: str) -> dict:
+def set_scene_property(file_path: str, node_name: str, key: str, value: object) -> dict:
     """Set or update a property on a node in a .tscn file.
 
     Args:
@@ -341,38 +341,34 @@ async def run_gut_tests(test_script: str = "", project_path: str = "") -> dict:
 
 
 @mcp.tool()
-async def screenshot_scene(scene_path: str, output_path: str = "", delay_ms: int = 1000,
-                           project_path: str = "") -> dict:
-    """Take a screenshot of a Godot scene using headless rendering.
+async def screenshot_scene(
+    scene_path: str,
+    output_path: str = "",
+    delay_ms: int = 1000,
+    project_path: str = "",
+    artifact_name: str = "",
+    headless: bool = False,
+    include_base64: bool = True,
+    godot_path: str = "",
+) -> dict:
+    """Take a screenshot of a Godot scene via the shared ScreenshotTool.
 
-    Args:
-        scene_path: res:// path to the scene (e.g., "res://scenes/main.tscn")
-        output_path: Where to save PNG. Empty = temp file.
-        delay_ms: Wait time before capture (ms). Default 1000.
+    Defaults to windowed rendering on desktop platforms for reliable viewport capture.
     """
-    import asyncio
-    import tempfile
-    from godot_agent.tools.godot_cli import build_screenshot_script
-    from godot_agent.llm.vision import encode_image
+    from godot_agent.tools.screenshot import ScreenshotTool
 
     root = project_path or str(_root())
-    if not output_path:
-        output_path = str(Path(tempfile.mkdtemp()) / "screenshot.png")
-
-    script = build_screenshot_script(scene_path, output_path, delay_ms)
-    script_path = str(Path(tempfile.mkdtemp()) / "capture.gd")
-    Path(script_path).write_text(script)
-
-    proc = await asyncio.create_subprocess_exec(
-        _godot_path(), "--headless", "-s", script_path,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=root)
-    await asyncio.wait_for(proc.communicate(), timeout=30)
-
-    if not Path(output_path).exists():
-        return {"success": False, "error": "Screenshot not created. Scene may have failed to load."}
-
-    b64 = encode_image(output_path)
-    return {"success": True, "path": output_path, "image_base64": b64}
+    return await _execute_tool(
+        ScreenshotTool,
+        scene_path=scene_path,
+        godot_path=godot_path or _godot_path(),
+        project_path=root,
+        output_path=output_path,
+        artifact_name=artifact_name or (Path(scene_path).stem or "scene"),
+        headless=headless,
+        include_base64=include_base64,
+        delay_ms=delay_ms,
+    )
 
 
 @mcp.tool()
@@ -391,6 +387,55 @@ async def run_playtest(project_path: str = "", changed_files: list[str] | None =
 
     root = project_path or str(_root())
     return await _execute_tool(RunPlaytestTool, project_path=root, changed_files=changed_files or [])
+
+
+@mcp.tool()
+async def run_scripted_playtest(
+    project_path: str = "",
+    scenario_ids: list[str] | None = None,
+    changed_files: list[str] | None = None,
+    run_all: bool = False,
+) -> dict:
+    """Run scripted-route playtest contracts against the current runtime evidence."""
+    from godot_agent.tools.editor_bridge import RunScriptedPlaytestTool
+
+    root = project_path or str(_root())
+    return await _execute_tool(
+        RunScriptedPlaytestTool,
+        project_path=root,
+        scenario_ids=scenario_ids or [],
+        changed_files=changed_files or [],
+        run_all=run_all,
+    )
+
+
+@mcp.tool()
+async def list_scenarios(project_path: str = "", include_generated: bool = False) -> dict:
+    """List playtest scenarios and mark which ones match the current project profile."""
+    from godot_agent.tools.editor_bridge import ListScenariosTool
+
+    root = project_path or str(_root())
+    return await _execute_tool(ListScenariosTool, project_path=root, include_generated=include_generated)
+
+
+@mcp.tool()
+async def list_contracts(
+    project_path: str = "",
+    scenario_id: str = "",
+    include_generated: bool = False,
+    show_all: bool = False,
+) -> dict:
+    """List detailed scenario contracts for the current gameplay profile or a specific scenario id."""
+    from godot_agent.tools.editor_bridge import ListContractsTool
+
+    root = project_path or str(_root())
+    return await _execute_tool(
+        ListContractsTool,
+        project_path=root,
+        scenario_id=scenario_id,
+        include_generated=include_generated,
+        show_all=show_all,
+    )
 
 
 @mcp.tool()
@@ -623,8 +668,16 @@ async def slice_sprite_sheet(
 
 
 @mcp.tool()
-async def validate_sprite_imports(project_path: str = "", metadata_path: str = "", sprite_dir: str = "") -> dict:
-    """Validate sliced sprite frames or a manifest for missing files and inconsistent sizes."""
+async def validate_sprite_imports(
+    project_path: str = "",
+    metadata_path: str = "",
+    sprite_dir: str = "",
+    smoke_scene_path: str = "",
+    smoke_baseline_id: str = "",
+    smoke_tolerance: int = 0,
+    create_baseline: bool = False,
+) -> dict:
+    """Validate sliced sprite frames or a manifest, with optional smoke screenshot and baseline compare."""
     from godot_agent.tools.runtime_harness import ValidateSpriteImportsTool
 
     root = project_path or str(_root())
@@ -633,6 +686,10 @@ async def validate_sprite_imports(project_path: str = "", metadata_path: str = "
         project_path=root,
         metadata_path=metadata_path,
         sprite_dir=sprite_dir,
+        smoke_scene_path=smoke_scene_path,
+        smoke_baseline_id=smoke_baseline_id,
+        smoke_tolerance=smoke_tolerance,
+        create_baseline=create_baseline,
     )
 
 

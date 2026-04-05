@@ -1,0 +1,66 @@
+{
+  "id": "topdown_shooter_flank_resolution",
+  "title": "Top-Down Shooter Flank Resolution",
+  "description": "Check that the player can resolve a flanking pressure pattern without losing all survivability cues.",
+  "genres": ["topdown_shooter"],
+  "testing_focus": ["combat_feedback"],
+  "steps": [
+    {
+      "title": "Replay flank-and-clear route",
+      "action": "scripted_route",
+      "route_segments": [
+        {
+          "press": ["move_left", "fire"],
+          "ticks": 90,
+          "state_updates": {
+            "enemy_bullets": 6,
+            "enemies_alive": 5,
+            "player_lives": 3,
+            "screen_flash": 0
+          },
+          "events": [
+            { "name": "encounter_opened" }
+          ],
+          "capture_as": "flank_start"
+        },
+        {
+          "release": ["move_left"],
+          "press": ["move_up", "fire"],
+          "ticks": 120,
+          "state_updates": {
+            "enemy_bullets": 2,
+            "enemies_alive": 1,
+            "player_lives": 2,
+            "screen_flash": 1
+          },
+          "events": [
+            { "name": "enemy_defeated" },
+            { "name": "hit_feedback" }
+          ],
+          "capture_as": "cleanup"
+        }
+      ],
+      "expect_events": ["enemy_defeated", "hit_feedback"],
+      "sample_asserts": [
+        {
+          "label": "cleanup reduces enemy bullet clutter",
+          "left_sample": "flank_start",
+          "left_key": "enemy_bullets",
+          "op": ">",
+          "right_sample": "cleanup",
+          "right_key": "enemy_bullets"
+        },
+        {
+          "label": "player remains alive after flank",
+          "left_sample": "cleanup",
+          "left_key": "player_lives",
+          "op": ">=",
+          "value": 1
+        }
+      ]
+    }
+  ],
+  "source": "manual",
+  "confidence": "medium",
+  "evidence_policy": "require_live_for_pass"
+}

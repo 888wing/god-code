@@ -2,8 +2,10 @@ from pathlib import Path
 
 import pytest
 
+from godot_agent.runtime.design_memory import DesignMemory, GameplayIntentProfile
 from godot_agent.runtime.quality_gate import QualityCheck, QualityGateReport
 from godot_agent.runtime.reviewer import format_review_report, review_changes
+from godot_agent.testing.scenario_runner import make_runtime_snapshot
 
 
 @pytest.mark.asyncio
@@ -70,3 +72,23 @@ async def test_reviewer_reports_ui_warnings_as_partial(tmp_path: Path):
 
     assert report.verdict == "PARTIAL"
     assert any("UI layout" in check.description for check in report.checks)
+
+
+@pytest.mark.asyncio
+async def test_reviewer_includes_demo_polish_warnings(tmp_path: Path):
+    (tmp_path / "project.godot").write_text('config_version=5\n\n[application]\nconfig/name="ReviewGame"\n')
+    script = tmp_path / "enemy.gd"
+    script.write_text("extends Node2D\n\nfunc _ready() -> void:\n\tpass\n")
+
+    report = await review_changes(
+        project_root=tmp_path,
+        changed_files={str(script)},
+        godot_path="true",
+        quality_report=QualityGateReport(changed_files=["enemy.gd"], checks=[]),
+        design_memory=DesignMemory(quality_target="demo"),
+        intent_profile=GameplayIntentProfile(genre="bullet_hell", testing_focus=["wave_timing", "boss_phase_clear"]),
+        runtime_snapshot=make_runtime_snapshot(event_names=["wave_started"]),
+    )
+
+    assert report.verdict == "PARTIAL"
+    assert any(check.status == "WARN" for check in report.checks)

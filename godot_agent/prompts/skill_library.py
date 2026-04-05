@@ -195,14 +195,16 @@ Checks:
 Goal: build readable, deliberate encounter choreography rather than generic reactive enemy AI.
 
 Workflow:
-1. Separate enemy core from movement pattern, fire pattern, and boss phase logic.
-2. Treat wave timing, entry path, and bullet shape as first-class combat design assets.
-3. Prefer scripted patterns and encounter direction over chase logic unless the genre profile explicitly asks for reactive enemies.
-4. Validate phase transitions, bullet clears, and dodge space with runtime harness checks.
+1. Separate enemy_core from movement_pattern, fire_pattern, encounter_director, and boss_phase_controller.
+2. Use explicit pattern families such as straight_drop, sine_drift, sweep_horizontal, fan_burst, ring_burst, spiral_stream, and boss_phase_sequence.
+3. Treat wave timing, entry path, density ramp, and bullet cleanup as first-class combat design assets.
+4. Prefer scripted patterns and encounter direction over chase logic unless the genre profile explicitly asks for reactive enemies.
+5. Validate phase transitions, bullet clears, and dodge space with runtime harness checks.
 
 Checks:
 - Waves should not race or double-advance.
 - Boss phase changes should clearly gate pattern transitions.
+- Bullets should either despawn on timeout or clear on phase transition; avoid immortal clutter.
 - Bullet density should remain readable relative to player movement speed.
 - Titles, controls, and actual mechanics should agree on the game's combat direction.
 """.strip(),

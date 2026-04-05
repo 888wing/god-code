@@ -4,27 +4,33 @@ from __future__ import annotations
 
 import copy
 import json
-from dataclasses import dataclass, field
+import subprocess
+import tempfile
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import re
 from typing import Any
 
 from godot_agent.godot.impact_analysis import ImpactAnalysisReport
 from godot_agent.godot.scene_parser import parse_tscn
-from godot_agent.runtime.design_memory import GameplayIntentProfile
+from godot_agent.runtime.design_memory import GameplayIntentProfile, resolved_quality_target, DesignMemory
 from godot_agent.runtime.runtime_bridge import (
+    RuntimeEvent,
     RuntimeSnapshot,
     add_runtime_screenshot,
     advance_runtime_ticks,
     get_runtime_snapshot,
     load_runtime_scene,
     press_runtime_action,
+    runtime_contract_events,
+    runtime_contract_state,
     runtime_events_since,
     runtime_state_dict,
     set_runtime_fixture,
     update_runtime_snapshot,
 )
-from godot_agent.runtime.visual_regression import compare_image_files, resolve_baseline_path, write_failure_bundle
+from godot_agent.runtime.visual_regression import build_artifact_path, compare_image_files, resolve_baseline_path, write_failure_bundle
+from godot_agent.tools.godot_cli import build_screenshot_script, resolve_godot_path
 
 
 SCENARIO_DIR = Path(__file__).with_name("scenario_specs")
@@ -80,11 +86,13 @@ class ScenarioSpec:
     genres: list[str] = field(default_factory=list)
     enemy_models: list[str] = field(default_factory=list)
     testing_focus: list[str] = field(default_factory=list)
+    quality_targets: list[str] = field(default_factory=list)
     fixtures: dict[str, Any] = field(default_factory=dict)
     steps: list["ScenarioStep"] = field(default_factory=list)
     source: str = "manual"
     confidence: str = "high"
     evidence_policy: str = "advisory"
+    authoritative_assertions: list[str] = field(default_factory=list)
     source_scene: str = ""
 
 
@@ -106,6 +114,36 @@ class ScenarioStep:
     expect_state: dict[str, Any] = field(default_factory=dict)
     expect_events: list[str] = field(default_factory=list)
     visual_asserts: list[VisualAssert] = field(default_factory=list)
+    route_segments: list["RouteSegment"] = field(default_factory=list)
+    sample_asserts: list["SampleAssert"] = field(default_factory=list)
+
+
+@dataclass
+class RouteSegment:
+    ticks: int = 0
+    press: list[str] = field(default_factory=list)
+    release: list[str] = field(default_factory=list)
+    state_updates: dict[str, Any] = field(default_factory=dict)
+    events: list[dict[str, Any]] = field(default_factory=list)
+    capture_as: str = ""
+
+
+@dataclass
+class SampleAssert:
+    label: str = ""
+    left_sample: str = ""
+    left_key: str = ""
+    op: str = "=="
+    right_sample: str = ""
+    right_key: str = ""
+    value: Any = None
+
+
+@dataclass
+class StepExecutionResult:
+    snapshot: RuntimeSnapshot | None
+    observations: list[str] = field(default_factory=list)
+    samples: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -130,9 +168,21 @@ class PlaytestReport:
         statuses = {scenario.status for scenario in self.scenarios}
         if "FAIL" in statuses:
             return "FAIL"
-        if "PARTIAL" in statuses:
+        if "PARTIAL" in statuses or "WARN" in statuses:
             return "PARTIAL"
         return "PASS"
+
+
+@dataclass
+class AuthoritativePlaytestEvidence:
+    scene_path: str
+    summary_path: str
+    summary: dict[str, Any]
+    assertions: dict[str, dict[str, Any]]
+    snapshot: RuntimeSnapshot
+    exit_code: int = 0
+    stdout: str = ""
+    stderr: str = ""
 
 
 def _load_scenario_specs(directory: Path = SCENARIO_DIR) -> list[ScenarioSpec]:
@@ -151,6 +201,11 @@ def _load_scenario_specs(directory: Path = SCENARIO_DIR) -> list[ScenarioSpec]:
                 expect_state=step.get("expect_state", {}),
                 expect_events=step.get("expect_events", []),
                 visual_asserts=[VisualAssert(**visual) for visual in step.get("visual_asserts", [])],
+                route_segments=[
+                    RouteSegment(**segment)
+                    for segment in step.get("route_segments", step.get("segments", []))
+                ],
+                sample_asserts=[SampleAssert(**assertion) for assertion in step.get("sample_asserts", [])],
             )
             for step in data.get("steps", [])
         ]
@@ -168,11 +223,13 @@ def _load_scenario_specs(directory: Path = SCENARIO_DIR) -> list[ScenarioSpec]:
                 genres=data.get("genres", []),
                 enemy_models=data.get("enemy_models", []),
                 testing_focus=data.get("testing_focus", []),
+                quality_targets=data.get("quality_targets", []),
                 fixtures=data.get("fixtures", {}),
                 steps=steps,
                 source=data.get("source", "manual"),
                 confidence=data.get("confidence", "high"),
                 evidence_policy=data.get("evidence_policy", "advisory"),
+                authoritative_assertions=list(data.get("authoritative_assertions") or []),
                 source_scene=data.get("source_scene", ""),
             )
         )
@@ -217,6 +274,285 @@ def _apply_evidence_policy(
         return "PARTIAL", observations
 
     return status, observations
+
+
+_PLAYTEST_SUMMARY_RE = re.compile(r"PLAYTEST_SUMMARY\s+(.+)")
+
+
+def _discover_headless_playtest_scene(project_root: Path) -> str:
+    preferred = [
+        project_root / "scenes" / "playtests" / "scripted_combat_playtest.tscn",
+        project_root / "scenes" / "playtests" / "scripted_playtest.tscn",
+    ]
+    for candidate in preferred:
+        if candidate.exists():
+            return _as_res_path(project_root, candidate)
+
+    playtest_dir = project_root / "scenes" / "playtests"
+    if playtest_dir.exists():
+        for candidate in sorted(playtest_dir.glob("*.tscn")):
+            if candidate.is_file():
+                return _as_res_path(project_root, candidate)
+    return ""
+
+
+def _extract_summary_path(output: str) -> str:
+    match = _PLAYTEST_SUMMARY_RE.search(output)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+def _fallback_summary_path(project_root: Path) -> str:
+    artifact_dir = project_root / ".god-code-artifacts" / "playtests"
+    if not artifact_dir.exists():
+        return ""
+    candidates = sorted(
+        artifact_dir.glob("*.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return str(candidates[0]) if candidates else ""
+
+
+def _authoritative_screenshot_paths(summary: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+
+    def add_path(value: Any) -> None:
+        if not isinstance(value, str):
+            return
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        paths.append(normalized)
+
+    sections: list[dict[str, Any]] = [summary]
+    for key in ("wave", "boss", "visual"):
+        section = summary.get(key)
+        if isinstance(section, dict):
+            sections.append(section)
+
+    for section in sections:
+        screenshots = section.get("screenshots")
+        if not isinstance(screenshots, list):
+            continue
+        for item in screenshots:
+            if isinstance(item, dict):
+                add_path(item.get("path"))
+            else:
+                add_path(item)
+    return paths
+
+
+def _authoritative_visual_observations(summary: dict[str, Any]) -> list[str]:
+    observations: list[str] = []
+    seen: set[str] = set()
+    visual = summary.get("visual")
+    if not isinstance(visual, dict):
+        return observations
+
+    for item in visual.get("observations") or []:
+        if not isinstance(item, str):
+            continue
+        normalized = item.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        observations.append(normalized)
+    return observations
+
+
+def _capture_authoritative_visual_artifacts(project_root: Path, scene_path: str) -> list[dict[str, Any]]:
+    capture_plan = [
+        ("wave-pressure", 2500, ["pattern_readability", "wave_pressure"]),
+        ("boss-telegraph", 7000, ["phase_banner", "screen_flash", "boss_transition"]),
+        ("combat-feedback", 8500, ["hit_feedback", "enemy_defeated", "combat_feedback"]),
+    ]
+    resolved_godot_path = resolve_godot_path("godot")
+    captures: list[dict[str, Any]] = []
+    scene_stem = Path(scene_path).stem or "playtest"
+
+    for label, delay_ms, tags in capture_plan:
+        output_path = build_artifact_path(
+            project_root,
+            category="playtests",
+            name=f"{scene_stem}-{label}",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script_path = Path(tmpdir) / "capture.gd"
+            script_path.write_text(
+                build_screenshot_script(scene_path, str(output_path), delay_ms),
+                encoding="utf-8",
+            )
+            try:
+                proc = subprocess.run(
+                    [resolved_godot_path, "-s", str(script_path)],
+                    cwd=str(project_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=max(45, int(delay_ms / 1000) + 20),
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+        if proc.returncode not in (0, None) or not output_path.exists():
+            continue
+        captures.append(
+            {
+                "path": str(output_path),
+                "label": label.replace("-", " ").title(),
+                "tags": tags,
+            }
+        )
+    return captures
+
+
+def _snapshot_from_authoritative_summary(
+    *,
+    scene_path: str,
+    summary_path: str,
+    summary: dict[str, Any],
+) -> RuntimeSnapshot:
+    state: dict[str, Any] = {"authoritative_summary_path": summary_path}
+    events: list[RuntimeEvent] = []
+    screenshot_paths = _authoritative_screenshot_paths(summary)
+
+    wave = summary.get("wave") if isinstance(summary.get("wave"), dict) else {}
+    samples = wave.get("samples") if isinstance(wave, dict) else []
+    if isinstance(samples, list) and samples:
+        opening = samples[0] if isinstance(samples[0], dict) else {}
+        closing = samples[-1] if isinstance(samples[-1], dict) else {}
+        state.update(
+            {
+                "enemy_bullets": closing.get("enemy_bullets", opening.get("enemy_bullets", 0)),
+                "player_bullets": closing.get("player_bullets", opening.get("player_bullets", 0)),
+                "enemies_alive": closing.get("enemies", opening.get("enemies", 0)),
+                "player_lives": closing.get("lives", opening.get("lives", 0)),
+            }
+        )
+
+    boss = summary.get("boss") if isinstance(summary.get("boss"), dict) else {}
+    if boss:
+        phases_seen = boss.get("phases_seen") or []
+        if phases_seen:
+            state["boss_phase"] = phases_seen[-1]
+        if "remaining_enemy_bullets" in boss:
+            state["enemy_bullets"] = boss.get("remaining_enemy_bullets", state.get("enemy_bullets", 0))
+        if "bullets_before_clear" in boss:
+            state["boss_transition_pressure"] = max(boss.get("bullets_before_clear") or [0])
+
+    visual = summary.get("visual") if isinstance(summary.get("visual"), dict) else {}
+    cues = visual.get("cues") if isinstance(visual.get("cues"), dict) else {}
+    if "phase_banner_visible" in cues:
+        state["phase_banner_visible"] = bool(cues.get("phase_banner_visible"))
+    if "screen_flash" in cues:
+        state["screen_flash"] = int(bool(cues.get("screen_flash")))
+    if cues.get("hit_feedback"):
+        events.append(RuntimeEvent(name="hit_feedback", tick=0))
+    if cues.get("enemy_defeated"):
+        events.append(RuntimeEvent(name="enemy_defeated", tick=0))
+
+    for assertion in summary.get("assertions") or []:
+        if not isinstance(assertion, dict):
+            continue
+        name = str(assertion.get("name", "")).strip()
+        if not name:
+            continue
+        if name.startswith("wave_"):
+            events.append(RuntimeEvent(name="wave_pressure", tick=0))
+        if name.startswith("boss_phase_"):
+            events.append(RuntimeEvent(name="boss_phase_changed", tick=0))
+        if name == "boss_transitions_clear_bullets":
+            events.append(RuntimeEvent(name="boss_transition_cleared", tick=0))
+
+    snapshot = RuntimeSnapshot(
+        active_scene=scene_path,
+        current_tick=int(state.get("boss_phase", 0) or 0),
+        events=events,
+        state=state,
+        screenshot_paths=screenshot_paths,
+        source="headless",
+        evidence_level="high",
+        bridge_connected=False,
+    )
+    return update_runtime_snapshot(snapshot)
+
+
+def _run_authoritative_headless_playtest(project_root: Path) -> AuthoritativePlaytestEvidence | None:
+    scene_path = _discover_headless_playtest_scene(project_root)
+    if not scene_path:
+        return None
+
+    summary_guess = Path(_fallback_summary_path(project_root))
+    if summary_guess.exists():
+        try:
+            summary_guess.unlink()
+        except OSError:
+            pass
+
+    cmd = [resolve_godot_path("godot"), "--headless", "--path", str(project_root), scene_path]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            timeout=240,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+    output = "\n".join(part for part in [proc.stdout, proc.stderr] if part)
+    summary_path = _extract_summary_path(output) or _fallback_summary_path(project_root)
+    if not summary_path:
+        return None
+    summary_file = Path(summary_path)
+    if not summary_file.exists():
+        return None
+
+    try:
+        summary = json.loads(summary_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if not _authoritative_screenshot_paths(summary):
+        supplemental_captures = _capture_authoritative_visual_artifacts(project_root, scene_path)
+        if supplemental_captures:
+            visual = summary.get("visual")
+            if not isinstance(visual, dict):
+                visual = {}
+            screenshots = visual.get("screenshots")
+            if not isinstance(screenshots, list):
+                screenshots = []
+            screenshots.extend(supplemental_captures)
+            visual["screenshots"] = screenshots
+            summary["visual"] = visual
+
+    assertions: dict[str, dict[str, Any]] = {}
+    for assertion in summary.get("assertions") or []:
+        if isinstance(assertion, dict):
+            name = str(assertion.get("name", "")).strip()
+            if name:
+                assertions[name] = assertion
+
+    snapshot = _snapshot_from_authoritative_summary(
+        scene_path=scene_path,
+        summary_path=str(summary_file),
+        summary=summary,
+    )
+    return AuthoritativePlaytestEvidence(
+        scene_path=scene_path,
+        summary_path=str(summary_file),
+        summary=summary,
+        assertions=assertions,
+        snapshot=snapshot,
+        exit_code=int(proc.returncode or 0),
+        stdout=proc.stdout,
+        stderr=proc.stderr,
+    )
 
 
 def generate_scenario_specs(
@@ -291,16 +627,50 @@ def generate_scenario_specs(
     return generated
 
 
-def _scenario_matches_profile(spec: ScenarioSpec, intent_profile: GameplayIntentProfile | None) -> bool:
-    if intent_profile is None or intent_profile.is_empty:
+def _scenario_matches_profile(
+    spec: ScenarioSpec,
+    intent_profile: GameplayIntentProfile | None,
+    quality_target: str = "prototype",
+) -> bool:
+    if spec.quality_targets and quality_target not in spec.quality_targets:
         return False
-    if spec.genres and intent_profile.genre in spec.genres:
+
+    if intent_profile is None or intent_profile.is_empty:
+        return bool(spec.quality_targets and quality_target in spec.quality_targets)
+
+    explicit_match = False
+    if spec.genres:
+        if intent_profile.genre not in spec.genres:
+            return False
+        explicit_match = True
+    if spec.enemy_models:
+        if intent_profile.enemy_model not in spec.enemy_models:
+            return False
+        explicit_match = True
+    if explicit_match:
         return True
-    if spec.enemy_models and intent_profile.enemy_model in spec.enemy_models:
-        return True
+
     if spec.testing_focus and set(spec.testing_focus) & set(intent_profile.testing_focus):
         return True
+    if spec.quality_targets and quality_target in spec.quality_targets:
+        return True
     return False
+
+
+def _scenario_constraints_compatible(
+    spec: ScenarioSpec,
+    intent_profile: GameplayIntentProfile | None,
+    quality_target: str,
+) -> bool:
+    if spec.quality_targets and quality_target not in spec.quality_targets:
+        return False
+    if spec.genres:
+        if intent_profile is None or intent_profile.is_empty or intent_profile.genre not in spec.genres:
+            return False
+    if spec.enemy_models:
+        if intent_profile is None or intent_profile.is_empty or intent_profile.enemy_model not in spec.enemy_models:
+            return False
+    return True
 
 
 def select_relevant_scenarios(
@@ -308,6 +678,7 @@ def select_relevant_scenarios(
     impact_report: ImpactAnalysisReport | None = None,
     directory: Path = SCENARIO_DIR,
     intent_profile: GameplayIntentProfile | None = None,
+    quality_target: str = "prototype",
     specs: list[ScenarioSpec] | None = None,
 ) -> list[ScenarioSpec]:
     changed_paths = {Path(path).name.lower() for path in changed_files}
@@ -317,11 +688,106 @@ def select_relevant_scenarios(
     relevant: list[ScenarioSpec] = []
     for spec in specs or _load_scenario_specs(directory):
         triggers = [token.lower() for token in spec.path_contains]
-        path_match = not triggers or any(token in path for token in triggers for path in changed_paths)
-        profile_match = _scenario_matches_profile(spec, intent_profile)
+        path_match = (
+            bool(triggers)
+            and _scenario_constraints_compatible(spec, intent_profile, quality_target)
+            and any(token in path for token in triggers for path in changed_paths)
+        )
+        profile_match = _scenario_matches_profile(spec, intent_profile, quality_target=quality_target)
         if path_match or profile_match:
             relevant.append(spec)
     return relevant
+
+
+def _step_to_contract(step: ScenarioStep) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "title": step.title,
+        "action": step.action,
+    }
+    if step.args:
+        payload["args"] = dict(step.args)
+    if step.ticks:
+        payload["ticks"] = step.ticks
+    if step.expect_scene:
+        payload["expect_scene"] = step.expect_scene
+    if step.expect_state:
+        payload["expect_state"] = dict(step.expect_state)
+    if step.expect_events:
+        payload["expect_events"] = list(step.expect_events)
+    if step.visual_asserts:
+        payload["visual_asserts"] = [asdict(visual) for visual in step.visual_asserts]
+    if step.route_segments:
+        payload["route_segments"] = [asdict(segment) for segment in step.route_segments]
+    if step.sample_asserts:
+        payload["sample_asserts"] = [asdict(assertion) for assertion in step.sample_asserts]
+    return payload
+
+
+def scenario_contract(spec: ScenarioSpec) -> dict[str, Any]:
+    return {
+        "id": spec.id,
+        "title": spec.title,
+        "description": spec.description,
+        "required_scene": spec.required_scene,
+        "genres": list(spec.genres),
+        "enemy_models": list(spec.enemy_models),
+        "testing_focus": list(spec.testing_focus),
+        "quality_targets": list(spec.quality_targets),
+        "source": spec.source,
+        "confidence": spec.confidence,
+        "evidence_policy": spec.evidence_policy,
+        "authoritative_assertions": list(spec.authoritative_assertions),
+        "steps": [_step_to_contract(step) for step in spec.steps],
+    }
+
+
+def list_scenario_specs(
+    *,
+    directory: Path = SCENARIO_DIR,
+    intent_profile: GameplayIntentProfile | None = None,
+    quality_target: str = "prototype",
+    project_root: Path | None = None,
+    include_generated: bool = False,
+) -> list[dict[str, Any]]:
+    specs = _load_scenario_specs(directory)
+    if include_generated and project_root is not None:
+        specs.extend(generate_scenario_specs(project_root, existing_specs=specs))
+    return [
+        {
+            "id": spec.id,
+            "title": spec.title,
+            "description": spec.description,
+            "has_steps": bool(spec.steps),
+            "genres": list(spec.genres),
+            "enemy_models": list(spec.enemy_models),
+            "testing_focus": list(spec.testing_focus),
+            "quality_targets": list(spec.quality_targets),
+            "path_contains": list(spec.path_contains),
+            "authoritative_assertions": list(spec.authoritative_assertions),
+            "relevant": _scenario_matches_profile(spec, intent_profile, quality_target=quality_target),
+        }
+        for spec in specs
+    ]
+
+
+def list_contracts(
+    *,
+    directory: Path = SCENARIO_DIR,
+    scenario_id: str = "",
+    intent_profile: GameplayIntentProfile | None = None,
+    quality_target: str = "prototype",
+    project_root: Path | None = None,
+    include_generated: bool = False,
+    match_profile: bool = True,
+) -> list[dict[str, Any]]:
+    specs = _load_scenario_specs(directory)
+    if include_generated and project_root is not None:
+        specs.extend(generate_scenario_specs(project_root, existing_specs=specs))
+    if scenario_id:
+        specs = [spec for spec in specs if spec.id == scenario_id]
+    elif match_profile:
+        specs = [spec for spec in specs if _scenario_matches_profile(spec, intent_profile, quality_target=quality_target)]
+    return [scenario_contract(spec) for spec in specs]
 
 
 def _evaluate_scenario(spec: ScenarioSpec, snapshot: RuntimeSnapshot | None) -> ScenarioResult:
@@ -339,7 +805,7 @@ def _evaluate_scenario(spec: ScenarioSpec, snapshot: RuntimeSnapshot | None) -> 
     status = "PASS"
     node_paths = {node.path for node in snapshot.nodes}
     node_names = {node.path.split("/")[-1] for node in snapshot.nodes}
-    event_names = {event.name for event in snapshot.events}
+    event_names = {event.name for event in runtime_contract_events(snapshot)}
     input_names = set(snapshot.input_actions)
 
     if spec.required_scene and snapshot.active_scene != spec.required_scene:
@@ -384,34 +850,158 @@ def _current_snapshot(seed_snapshot: RuntimeSnapshot | None) -> RuntimeSnapshot 
     return get_runtime_snapshot()
 
 
-def _execute_step_action(step: ScenarioStep, scenario: ScenarioSpec) -> RuntimeSnapshot | None:
+def _capture_route_sample(snapshot: RuntimeSnapshot | None) -> dict[str, Any]:
+    if snapshot is None:
+        return {"current_tick": 0, "state": {}, "contract_state": {}, "active_inputs": [], "fixtures": {}}
+    return {
+        "current_tick": snapshot.current_tick,
+        "state": dict(snapshot.state),
+        "contract_state": runtime_contract_state(snapshot),
+        "active_inputs": list(snapshot.active_inputs),
+        "fixtures": dict(snapshot.fixtures),
+    }
+
+
+def _execute_scripted_route(step: ScenarioStep) -> StepExecutionResult:
+    snapshot = get_runtime_snapshot()
+    observations: list[str] = []
+    samples: dict[str, dict[str, Any]] = {}
+
+    for segment in step.route_segments:
+        for action in segment.release:
+            snapshot = press_runtime_action(action, pressed=False)
+        for action in segment.press:
+            snapshot = press_runtime_action(action, pressed=True)
+        snapshot = advance_runtime_ticks(
+            segment.ticks,
+            state_updates=segment.state_updates,
+            events=segment.events,
+        )
+        if segment.capture_as:
+            samples[segment.capture_as] = _capture_route_sample(snapshot)
+            observations.append(
+                f"Captured sample {segment.capture_as} at tick {samples[segment.capture_as]['current_tick']}."
+            )
+
+    return StepExecutionResult(snapshot=snapshot, observations=observations, samples=samples)
+
+
+def _execute_step_action(step: ScenarioStep, scenario: ScenarioSpec) -> StepExecutionResult:
     action = step.action.strip().lower()
     args = step.args
     if action == "load_scene":
-        return load_runtime_scene(str(args.get("scene_path") or scenario.required_scene))
+        return StepExecutionResult(snapshot=load_runtime_scene(str(args.get("scene_path") or scenario.required_scene)))
     if action == "set_fixture":
         if "name" in args:
-            return set_runtime_fixture(str(args["name"]), args.get("payload", {}))
+            return StepExecutionResult(snapshot=set_runtime_fixture(str(args["name"]), args.get("payload", {})))
         snapshot = get_runtime_snapshot()
         for fixture_name, payload in args.items():
             snapshot = set_runtime_fixture(str(fixture_name), payload)
-        return snapshot
+        return StepExecutionResult(snapshot=snapshot)
     if action == "press_action":
-        return press_runtime_action(str(args.get("action", "")), pressed=bool(args.get("pressed", True)))
-    if action == "release_action":
-        return press_runtime_action(str(args.get("action", "")), pressed=False)
-    if action == "advance_ticks":
-        return advance_runtime_ticks(
-            step.ticks or int(args.get("count", 1)),
-            state_updates=args.get("state_updates", {}),
-            events=args.get("events", []),
+        return StepExecutionResult(
+            snapshot=press_runtime_action(str(args.get("action", "")), pressed=bool(args.get("pressed", True)))
         )
+    if action == "release_action":
+        return StepExecutionResult(snapshot=press_runtime_action(str(args.get("action", "")), pressed=False))
+    if action == "advance_ticks":
+        return StepExecutionResult(
+            snapshot=advance_runtime_ticks(
+                step.ticks or int(args.get("count", 1)),
+                state_updates=args.get("state_updates", {}),
+                events=args.get("events", []),
+            )
+        )
+    if action == "scripted_route":
+        return _execute_scripted_route(step)
     if action == "capture_viewport":
         path_value = str(args.get("actual_path", "")).strip()
         if path_value:
             add_runtime_screenshot(path_value)
-        return get_runtime_snapshot()
-    return get_runtime_snapshot()
+        return StepExecutionResult(snapshot=get_runtime_snapshot())
+    return StepExecutionResult(snapshot=get_runtime_snapshot())
+
+
+def _resolve_sample_value(
+    *,
+    sample_name: str,
+    key: str,
+    samples: dict[str, dict[str, Any]],
+    snapshot: RuntimeSnapshot | None,
+) -> Any:
+    payload = _capture_route_sample(snapshot) if not sample_name or sample_name == "current" else samples.get(sample_name)
+    if payload is None:
+        raise KeyError(f"sample {sample_name!r} was not captured")
+    if key in {"current_tick", "tick"}:
+        return payload.get("current_tick")
+    if key.startswith("contract."):
+        return payload.get("contract_state", {}).get(key.split(".", 1)[1])
+    if key.startswith("state."):
+        return payload.get("state", {}).get(key.split(".", 1)[1])
+    if key.startswith("fixture."):
+        return payload.get("fixtures", {}).get(key.split(".", 1)[1])
+    if key == "active_inputs":
+        return payload.get("active_inputs", [])
+    if key in payload.get("contract_state", {}):
+        return payload.get("contract_state", {}).get(key)
+    return payload.get("state", {}).get(key)
+
+
+def _sample_assertion_message(assertion: SampleAssert) -> str:
+    return assertion.label or f"{assertion.left_sample or 'current'}.{assertion.left_key} {assertion.op}"
+
+
+def _evaluate_sample_asserts(
+    *,
+    step: ScenarioStep,
+    samples: dict[str, dict[str, Any]],
+    snapshot: RuntimeSnapshot | None,
+) -> list[str]:
+    observations: list[str] = []
+    operators = {
+        "==": lambda left, right: left == right,
+        "!=": lambda left, right: left != right,
+        ">": lambda left, right: left > right,
+        ">=": lambda left, right: left >= right,
+        "<": lambda left, right: left < right,
+        "<=": lambda left, right: left <= right,
+    }
+
+    for assertion in step.sample_asserts:
+        comparator = operators.get(assertion.op)
+        if comparator is None:
+            observations.append(f"Unsupported sample assertion operator: {assertion.op}")
+            continue
+        try:
+            left = _resolve_sample_value(
+                sample_name=assertion.left_sample,
+                key=assertion.left_key,
+                samples=samples,
+                snapshot=snapshot,
+            )
+            if assertion.right_sample or assertion.right_key:
+                right = _resolve_sample_value(
+                    sample_name=assertion.right_sample,
+                    key=assertion.right_key,
+                    samples=samples,
+                    snapshot=snapshot,
+                )
+            else:
+                right = assertion.value
+        except KeyError as exc:
+            observations.append(f"{_sample_assertion_message(assertion)}: {exc}")
+            continue
+        if comparator(left, right):
+            observations.append(
+                f"Sample assertion passed: {_sample_assertion_message(assertion)} "
+                f"({left!r} {assertion.op} {right!r})."
+            )
+            continue
+        observations.append(
+            f"Sample assertion failed: {_sample_assertion_message(assertion)} "
+            f"({left!r} {assertion.op} {right!r})."
+        )
+    return observations
 
 
 def _run_visual_asserts(
@@ -470,12 +1060,110 @@ def _run_visual_asserts(
     return observations, artifacts, failure_bundle
 
 
+def _execute_authoritative_scenario(
+    *,
+    spec: ScenarioSpec,
+    project_root: Path,
+    evidence: AuthoritativePlaytestEvidence,
+) -> ScenarioResult | None:
+    if not spec.authoritative_assertions:
+        return None
+
+    observations = [
+        f"Authoritative headless playtest scene: {evidence.scene_path}",
+        f"Authoritative summary: {evidence.summary_path}",
+    ]
+    artifacts = {"summary": evidence.summary_path}
+    screenshot_paths = _authoritative_screenshot_paths(evidence.summary)
+    if screenshot_paths:
+        artifacts["screenshots"] = screenshot_paths
+    for observation in _authoritative_visual_observations(evidence.summary):
+        observations.append(observation)
+    missing: list[str] = []
+    failures: list[tuple[str, dict[str, Any]]] = []
+
+    for assertion_name in spec.authoritative_assertions:
+        assertion = evidence.assertions.get(assertion_name)
+        if assertion is None:
+            missing.append(assertion_name)
+            continue
+        passed = bool(assertion.get("passed", False))
+        details = assertion.get("details", {})
+        if passed:
+            observations.append(f"Authoritative assertion passed: {assertion_name}.")
+        else:
+            observations.append(f"Authoritative assertion failed: {assertion_name}.")
+            failures.append((assertion_name, details if isinstance(details, dict) else {"details": details}))
+
+    if failures:
+        assertion_name, details = failures[0]
+        failure_bundle = str(
+            write_failure_bundle(
+                project_root,
+                test_id=f"{spec.id}-authoritative",
+                payload={
+                    "test_id": spec.id,
+                    "step": "authoritative_headless_playtest",
+                    "reason": f"authoritative_assertion_failed:{assertion_name}",
+                    "scene": evidence.scene_path,
+                    "ui_state": runtime_state_dict(evidence.snapshot),
+                    "artifacts": artifacts,
+                    "details": details,
+                },
+            )
+        )
+        return ScenarioResult(
+            id=spec.id,
+            title=spec.title,
+            status="FAIL",
+            observations=observations,
+            artifacts=artifacts,
+            failure_bundle=failure_bundle,
+            evidence_source="headless",
+            evidence_level=evidence.snapshot.evidence_level,
+        )
+
+    if missing:
+        observations.append("Missing authoritative assertions: " + ", ".join(missing))
+        return ScenarioResult(
+            id=spec.id,
+            title=spec.title,
+            status="PARTIAL",
+            observations=observations,
+            artifacts=artifacts,
+            evidence_source="headless",
+            evidence_level=evidence.snapshot.evidence_level,
+        )
+
+    observations.append(f"Evidence source: headless ({evidence.snapshot.evidence_level})")
+    return ScenarioResult(
+        id=spec.id,
+        title=spec.title,
+        status="PASS",
+        observations=observations,
+        artifacts=artifacts,
+        evidence_source="headless",
+        evidence_level=evidence.snapshot.evidence_level,
+    )
+
+
 def _execute_step_scenario(
     *,
     spec: ScenarioSpec,
     project_root: Path,
     runtime_snapshot: RuntimeSnapshot | None,
+    authoritative_evidence: AuthoritativePlaytestEvidence | None = None,
 ) -> ScenarioResult:
+    authoritative_result = None
+    if authoritative_evidence is not None:
+        authoritative_result = _execute_authoritative_scenario(
+            spec=spec,
+            project_root=project_root,
+            evidence=authoritative_evidence,
+        )
+    if authoritative_result is not None:
+        return authoritative_result
+
     snapshot = _current_snapshot(runtime_snapshot) if runtime_snapshot is not None else None
     if snapshot is None:
         snapshot = load_runtime_scene(spec.required_scene)
@@ -489,10 +1177,10 @@ def _execute_step_scenario(
     artifacts: dict[str, str] = {}
     for index, step in enumerate(spec.steps, start=1):
         before_tick = snapshot.current_tick if snapshot else 0
-        snapshot = _execute_step_action(step, spec)
-        snapshot = get_runtime_snapshot()
+        execution = _execute_step_action(step, spec)
+        snapshot = execution.snapshot or get_runtime_snapshot()
         step_status = "PASS"
-        step_observations: list[str] = []
+        step_observations: list[str] = list(execution.observations)
 
         expected_scene = step.expect_scene or ""
         if expected_scene and (snapshot is None or snapshot.active_scene != expected_scene):
@@ -501,7 +1189,8 @@ def _execute_step_scenario(
                 f"Expected active scene {expected_scene}, got {snapshot.active_scene if snapshot else '(none)'}."
             )
 
-        state = runtime_state_dict(snapshot).get("state", {})
+        state_payload = runtime_state_dict(snapshot)
+        state = state_payload.get("contract_state", {}) or state_payload.get("state", {})
         for key, expected_value in step.expect_state.items():
             actual_value = state.get(key)
             if actual_value != expected_value:
@@ -509,11 +1198,20 @@ def _execute_step_scenario(
                 step_observations.append(f"State mismatch for {key}: expected {expected_value!r}, got {actual_value!r}.")
 
         if step.expect_events:
-            recent_events = {event.name for event in runtime_events_since(before_tick)}
+            recent_events = {event.name for event in runtime_contract_events(snapshot) if event.tick > before_tick}
             missing = [name for name in step.expect_events if name not in recent_events]
             if missing:
                 step_status = "FAIL"
                 step_observations.append("Missing events: " + ", ".join(missing))
+
+        sample_assertions = _evaluate_sample_asserts(
+            step=step,
+            samples=execution.samples,
+            snapshot=snapshot,
+        )
+        step_observations.extend(sample_assertions)
+        if any(observation.startswith("Sample assertion failed:") or "Unsupported sample assertion operator" in observation for observation in sample_assertions):
+            step_status = "FAIL"
 
         visual_observations, visual_artifacts, failure_bundle = _run_visual_asserts(
             project_root=project_root,
@@ -586,8 +1284,10 @@ def run_playtest_harness(
     runtime_snapshot: RuntimeSnapshot | None = None,
     directory: Path = SCENARIO_DIR,
     intent_profile: GameplayIntentProfile | None = None,
+    design_memory: DesignMemory | None = None,
     auto_generate: bool = True,
 ) -> PlaytestReport:
+    quality_target = resolved_quality_target(design_memory)
     specs = _load_scenario_specs(directory)
     if auto_generate:
         specs.extend(generate_scenario_specs(project_root, existing_specs=specs))
@@ -596,6 +1296,7 @@ def run_playtest_harness(
         impact_report,
         directory=directory,
         intent_profile=intent_profile,
+        quality_target=quality_target,
         specs=specs,
     )
     if not scenarios:
@@ -609,6 +1310,72 @@ def run_playtest_harness(
             results.append(_execute_step_scenario(spec=spec, project_root=project_root, runtime_snapshot=runtime_snapshot))
         else:
             results.append(_evaluate_scenario(spec, runtime_snapshot))
+    return PlaytestReport(scenarios=results, profile_genre=intent_profile.genre if intent_profile else "")
+
+
+def run_scripted_playtest(
+    *,
+    project_root: Path,
+    scenario_ids: list[str] | None = None,
+    changed_files: set[str] | None = None,
+    impact_report: ImpactAnalysisReport | None = None,
+    runtime_snapshot: RuntimeSnapshot | None = None,
+    directory: Path = SCENARIO_DIR,
+    intent_profile: GameplayIntentProfile | None = None,
+    design_memory: DesignMemory | None = None,
+    auto_generate: bool = False,
+    run_all: bool = False,
+) -> PlaytestReport:
+    quality_target = resolved_quality_target(design_memory)
+    specs = _load_scenario_specs(directory)
+    if auto_generate:
+        specs.extend(generate_scenario_specs(project_root, existing_specs=specs))
+
+    authoritative_evidence = None
+    if not _authoritative_evidence(runtime_snapshot):
+        authoritative_evidence = _run_authoritative_headless_playtest(project_root)
+        if authoritative_evidence is not None:
+            runtime_snapshot = authoritative_evidence.snapshot
+            update_runtime_snapshot(copy.deepcopy(runtime_snapshot))
+    elif runtime_snapshot is not None:
+        update_runtime_snapshot(copy.deepcopy(runtime_snapshot))
+
+    if run_all:
+        scenarios = [spec for spec in specs if spec.steps]
+    elif scenario_ids:
+        wanted = {scenario_id.strip() for scenario_id in scenario_ids if scenario_id.strip()}
+        scenarios = [spec for spec in specs if spec.id in wanted]
+    else:
+        scenarios = select_relevant_scenarios(
+            changed_files or set(),
+            impact_report,
+            directory=directory,
+            intent_profile=intent_profile,
+            quality_target=quality_target,
+            specs=specs,
+        )
+    step_scenarios = [spec for spec in scenarios if spec.steps]
+    if not step_scenarios:
+        return PlaytestReport(
+            scenarios=[
+                ScenarioResult(
+                    id="none",
+                    title="No scripted scenarios",
+                    status="PASS",
+                    observations=["No scripted playtest scenario matched the current selection."],
+                )
+            ],
+            profile_genre=intent_profile.genre if intent_profile else "",
+        )
+    results = [
+        _execute_step_scenario(
+            spec=spec,
+            project_root=project_root,
+            runtime_snapshot=runtime_snapshot,
+            authoritative_evidence=authoritative_evidence,
+        )
+        for spec in step_scenarios
+    ]
     return PlaytestReport(scenarios=results, profile_genre=intent_profile.genre if intent_profile else "")
 
 

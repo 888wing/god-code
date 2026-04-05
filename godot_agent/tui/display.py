@@ -38,6 +38,8 @@ class ChatDisplay:
         self.project_path = ""
         self.project_info: dict[str, Any] = {}
         self.intent_profile: dict[str, Any] = {}
+        self.quality_target = "prototype"
+        self.asset_spec: dict[str, Any] = {}
         self.last_focus = ""
         self.last_response_preview = ""
         self.last_validation = "Not run"
@@ -70,6 +72,8 @@ class ChatDisplay:
         disabled_skills: list[str] | None = None,
         project_info: dict[str, Any] | None = None,
         intent_profile: dict[str, Any] | None = None,
+        quality_target: str = "prototype",
+        asset_spec: dict[str, Any] | None = None,
     ) -> None:
         self.session_id = session_id
         self.provider = provider
@@ -86,6 +90,9 @@ class ChatDisplay:
             self.project_info = project_info
         if intent_profile is not None:
             self.intent_profile = dict(intent_profile)
+        self.quality_target = quality_target or "prototype"
+        if asset_spec is not None:
+            self.asset_spec = dict(asset_spec)
 
     def update_project_info(self, project_info: dict[str, Any]) -> None:
         self.project_info = project_info
@@ -115,6 +122,8 @@ class ChatDisplay:
         enabled_skills: list[str] | None = None,
         disabled_skills: list[str] | None = None,
         intent_profile: dict[str, Any] | None = None,
+        quality_target: str = "prototype",
+        asset_spec: dict[str, Any] | None = None,
     ) -> None:
         self.configure_workspace(
             session_id=session_id,
@@ -129,6 +138,8 @@ class ChatDisplay:
             project_name=project_name,
             project_path=project_path,
             intent_profile=intent_profile,
+            quality_target=quality_target,
+            asset_spec=asset_spec,
         )
         title = Text("God Code", style="bold cyan")
         spec = get_mode_spec(mode)
@@ -137,6 +148,7 @@ class ChatDisplay:
             parts.append(f"Provider: {provider}")
         parts.extend([f"Model: {model}", f"Effort: {effort}", f"Mode: {spec.label}"])
         parts.append(f"Skills: {skill_mode}")
+        parts.append(f"Quality: {quality_target}")
         if project_name:
             parts.append(f"Project: {project_name}")
         else:
@@ -160,6 +172,11 @@ class ChatDisplay:
         t.add_row("/effort [level]", "show or switch reasoning effort")
         t.add_row("/skills [cmd]", "list or override internal skills")
         t.add_row("/intent [cmd]", "show or confirm gameplay intent")
+        t.add_row("/quality", "show the current project quality target")
+        t.add_row("/assetspec", "show the current sprite and asset constraints")
+        t.add_row("/playtest [relevant|all|id]", "run scripted playtest contracts")
+        t.add_row("/scenarios", "list built-in playtest scenarios")
+        t.add_row("/contracts [relevant|all|id]", "show scripted-route contract details")
         t.add_row("/info", "show project details")
         t.add_row("/status", "show provider, model, auth, and mode")
         t.add_row("/usage", "show token usage and cost")
@@ -203,6 +220,7 @@ class ChatDisplay:
         runtime_table.add_column()
         runtime_table.add_row("Focus", self.last_focus or "-")
         runtime_table.add_row("Active Skills", ", ".join(self.active_skills) if self.active_skills else "-")
+        runtime_table.add_row("Quality", self.quality_target or "prototype")
         runtime_table.add_row("Last Validation", self.last_validation)
         runtime_table.add_row("Tokens", f"{self.session_total_tokens:,}")
         runtime_table.add_row("API Calls", str(self.session_api_calls))
@@ -215,9 +233,26 @@ class ChatDisplay:
         intent_table.add_row("Combat", str(self.intent_profile.get("combat_model", "-") or "-"))
         intent_table.add_row("Enemy", str(self.intent_profile.get("enemy_model", "-") or "-"))
         intent_table.add_row("Boss", str(self.intent_profile.get("boss_model", "-") or "-"))
+        combat_profile = self.intent_profile.get("combat_profile") or {}
+        combat_summary = ", ".join(
+            filter(
+                None,
+                [
+                    str(combat_profile.get("player_space_model", "") or ""),
+                    str(combat_profile.get("density_curve", "") or ""),
+                    str(combat_profile.get("readability_target", "") or ""),
+                ],
+            )
+        )
+        intent_table.add_row("Combat Profile", combat_summary or "-")
         intent_table.add_row("Confidence", f"{float(self.intent_profile.get('confidence', 0.0) or 0.0):.2f}")
         conflicts = self.intent_profile.get("conflicts") or []
         intent_table.add_row("Conflicts", ", ".join(conflicts) if conflicts else "-")
+        asset_style = str(self.asset_spec.get("style", "-") or "-")
+        target_size = self.asset_spec.get("target_size") or []
+        size_label = f"{target_size[0]}x{target_size[1] if len(target_size) > 1 else target_size[0]}" if target_size else "-"
+        intent_table.add_row("Asset Style", asset_style)
+        intent_table.add_row("Asset Size", size_label)
 
         activity_table = Table(show_header=False, box=None, padding=(0, 1))
         activity_table.add_column(style="dim")
@@ -476,7 +511,13 @@ class ChatDisplay:
             table.add_row(label, str(profile.get(key, "-") or "-"))
         testing_focus = profile.get("testing_focus") or []
         conflicts = profile.get("conflicts") or []
+        combat_profile = profile.get("combat_profile") or {}
         table.add_row("Testing Focus", ", ".join(testing_focus) if testing_focus else "-")
+        table.add_row("Player Space", str(combat_profile.get("player_space_model", "-") or "-"))
+        table.add_row("Density Curve", str(combat_profile.get("density_curve", "-") or "-"))
+        table.add_row("Readability", str(combat_profile.get("readability_target", "-") or "-"))
+        table.add_row("Bullet Cleanup", str(combat_profile.get("bullet_cleanup_policy", "-") or "-"))
+        table.add_row("Phase Style", str(combat_profile.get("phase_style", "-") or "-"))
         table.add_row("Confirmed", "yes" if profile.get("confirmed") else "no")
         table.add_row("Confidence", f"{float(profile.get('confidence', 0.0) or 0.0):.2f}")
         table.add_row("Conflicts", ", ".join(conflicts) if conflicts else "-")
@@ -484,6 +525,101 @@ class ChatDisplay:
         if reasons:
             table.add_row("Reasons", " | ".join(str(item) for item in reasons[:3]))
         self.console.print(Panel(table, title="Gameplay Intent", border_style="yellow"))
+
+    def quality_panel(self, quality_target: str, polish_profile: dict[str, Any] | None = None) -> None:
+        profile = polish_profile or {}
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column(style="bold")
+        table.add_column()
+        table.add_row("Quality Target", quality_target or "prototype")
+        table.add_row("Combat Feedback", str(profile.get("combat_feedback", "-") or "-"))
+        table.add_row("Boss Transition", str(profile.get("boss_transition", "-") or "-"))
+        table.add_row("UI Readability", str(profile.get("ui_readability", "-") or "-"))
+        table.add_row("Wave Pacing", str(profile.get("wave_pacing", "-") or "-"))
+        table.add_row("Juice Level", str(profile.get("juice_level", "-") or "-"))
+        self.console.print(Panel(table, title="Quality Contract", border_style="magenta"))
+
+    def asset_spec_panel(self, asset_spec: dict[str, Any]) -> None:
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column(style="bold")
+        table.add_column()
+        target_size = asset_spec.get("target_size") or []
+        size_label = f"{target_size[0]}x{target_size[1] if len(target_size) > 1 else target_size[0]}" if target_size else "-"
+        table.add_row("Style", str(asset_spec.get("style", "-") or "-"))
+        table.add_row("Target Size", size_label)
+        table.add_row("Background Key", str(asset_spec.get("background_key", "-") or "-"))
+        table.add_row("Alpha Required", "yes" if asset_spec.get("alpha_required") else "no")
+        table.add_row("Palette Mode", str(asset_spec.get("palette_mode", "-") or "-"))
+        table.add_row("Import Filter", str(asset_spec.get("import_filter", "-") or "-"))
+        table.add_row("Allow Resize", "yes" if asset_spec.get("allow_resize", True) else "no")
+        self.console.print(Panel(table, title="Asset Spec", border_style="cyan"))
+
+    def scenarios_panel(self, scenarios: list[dict[str, Any]], quality_target: str) -> None:
+        table = Table(show_header=True, box=None, padding=(0, 1))
+        table.add_column("ID", style="bold cyan")
+        table.add_column("Genre")
+        table.add_column("Quality", style="magenta")
+        table.add_column("Steps", justify="right")
+        table.add_column("Relevant", justify="center")
+        table.add_column("Title")
+        for scenario in scenarios:
+            table.add_row(
+                str(scenario.get("id", "-")),
+                ", ".join(scenario.get("genres") or []) or "-",
+                ", ".join(scenario.get("quality_targets") or []) or quality_target,
+                "yes" if scenario.get("has_steps") else "no",
+                "yes" if scenario.get("relevant") else "no",
+                str(scenario.get("title", "-")),
+            )
+        self.console.print(Panel(table, title="Playtest Scenarios", border_style="green"))
+
+    def contracts_panel(self, contracts: list[dict[str, Any]], quality_target: str) -> None:
+        if not contracts:
+            self.console.print(Panel("No contracts matched the current selection.", title="Playtest Contracts", border_style="green"))
+            return
+        sections: list[Any] = []
+        for contract in contracts:
+            header = Text(f"{contract.get('id', '-')} | {contract.get('title', '-')}", style="bold cyan")
+            meta = Table(show_header=False, box=None, padding=(0, 1))
+            meta.add_column(style="bold")
+            meta.add_column()
+            meta.add_row("Genres", ", ".join(contract.get("genres") or []) or "-")
+            meta.add_row("Quality", ", ".join(contract.get("quality_targets") or []) or quality_target)
+            meta.add_row("Focus", ", ".join(contract.get("testing_focus") or []) or "-")
+            meta.add_row("Evidence", str(contract.get("evidence_policy", "-")))
+            sections.append(header)
+            sections.append(meta)
+            for index, step in enumerate(contract.get("steps") or [], start=1):
+                sections.append(Text(f"Step {index}: {step.get('title', '-')}", style="yellow"))
+                sections.append(
+                    Text(
+                        f"  action={step.get('action', '-')}"
+                        + (
+                            f" | segments={len(step.get('route_segments') or [])}"
+                            if step.get("route_segments")
+                            else ""
+                        ),
+                        style="dim",
+                    )
+                )
+        self.console.print(Panel(Group(*sections), title="Playtest Contracts", border_style="green"))
+
+    def playtest_panel(
+        self,
+        *,
+        verdict: str,
+        gameplay_review_verdict: str,
+        report: str,
+        scenarios: list[dict[str, Any]],
+    ) -> None:
+        summary = Table(show_header=False, box=None, padding=(0, 1))
+        summary.add_column(style="bold")
+        summary.add_column()
+        summary.add_row("Playtest", verdict)
+        summary.add_row("Gameplay Review", gameplay_review_verdict or "-")
+        summary.add_row("Scenario Count", str(len(scenarios)))
+        body = Group(summary, Text(report, style="default"))
+        self.console.print(Panel(body, title="Playtest Run", border_style="green"))
 
     def session_list_panel(self, sessions: list[Any]) -> None:
         t = Table(show_header=True, box=None, padding=(0, 1))

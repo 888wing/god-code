@@ -1,0 +1,11 @@
+{
+  "id": "bullet_hell_pattern_readability",
+  "title": "Bullet Hell Pattern Readability",
+  "description": "Check that bullet patterns remain readable relative to dodge space and movement speed.",
+  "genres": ["bullet_hell"],
+  "testing_focus": ["pattern_readability"],
+  "required_inputs": ["move_left", "move_right"],
+  "source": "manual",
+  "confidence": "high",
+  "evidence_policy": "require_live_for_pass"
+}

@@ -142,6 +142,7 @@ class AgentDispatcher:
             changed_files=changed_files,
             godot_path=self.godot_path,
             quality_report=quality_report,
+            runtime_snapshot=get_runtime_snapshot(),
         )
         return AgentTaskResult(
             role="reviewer",
@@ -158,6 +159,7 @@ class AgentDispatcher:
             changed_files=changed_files,
             runtime_snapshot=get_runtime_snapshot(),
             intent_profile=self._resolve_intent_profile(""),
+            design_memory=load_design_memory(Path(self.project_path)),
         )
         return AgentTaskResult(
             role="playtest_analyst",

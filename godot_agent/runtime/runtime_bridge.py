@@ -42,6 +42,26 @@ class RuntimeSnapshot:
 
 _snapshot: RuntimeSnapshot | None = None
 
+_CONTRACT_STATE_ALIASES: dict[str, tuple[str, ...]] = {
+    "enemy_bullets": ("enemy_bullets", "enemy_projectiles", "bullets_enemy", "enemy_bullet_count"),
+    "player_bullets": ("player_bullets", "player_projectiles", "bullets_player", "player_bullet_count"),
+    "enemies_alive": ("enemies_alive", "enemy_count", "active_enemies", "wave_enemy_count"),
+    "player_lives": ("player_lives", "lives", "lives_remaining", "player_hp"),
+    "boss_phase": ("boss_phase", "phase", "phase_index"),
+    "phase_banner_visible": ("phase_banner_visible", "boss_phase_banner_visible", "banner_visible"),
+    "screen_flash": ("screen_flash", "screen_flash_count", "flash_count"),
+}
+
+_CONTRACT_EVENT_ALIASES: dict[str, str] = {
+    "wave_begin": "wave_started",
+    "wave_start": "wave_started",
+    "wave_escalated": "wave_pressure",
+    "boss_phase": "boss_phase_changed",
+    "phase_changed": "boss_phase_changed",
+    "phase_transition_clear": "boss_transition_cleared",
+    "boss_transition_clear": "boss_transition_cleared",
+}
+
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -72,6 +92,54 @@ def _ensure_snapshot() -> RuntimeSnapshot:
     if _snapshot is None:
         _snapshot = _touch_snapshot(RuntimeSnapshot())
     return _snapshot
+
+
+def normalize_runtime_event_name(name: str) -> str:
+    normalized = name.strip().lower()
+    if not normalized:
+        return ""
+    return _CONTRACT_EVENT_ALIASES.get(normalized, normalized)
+
+
+def _resolve_contract_value(state: dict[str, Any], fixtures: dict[str, Any], aliases: tuple[str, ...]) -> Any:
+    for key in aliases:
+        if key in state:
+            return state[key]
+    for fixture_name in ("runtime", "combat", "encounter", "hud"):
+        payload = fixtures.get(fixture_name)
+        if isinstance(payload, dict):
+            for key in aliases:
+                if key in payload:
+                    return payload[key]
+    return None
+
+
+def runtime_contract_state(snapshot: RuntimeSnapshot | None = None) -> dict[str, Any]:
+    target = snapshot or _snapshot
+    if target is None:
+        return {}
+    contract: dict[str, Any] = {}
+    for key, aliases in _CONTRACT_STATE_ALIASES.items():
+        value = _resolve_contract_value(target.state, target.fixtures, aliases)
+        if value is not None:
+            contract[key] = value
+    return contract
+
+
+def runtime_contract_events(snapshot: RuntimeSnapshot | None = None) -> list[RuntimeEvent]:
+    target = snapshot or _snapshot
+    if target is None:
+        return []
+    normalized: list[RuntimeEvent] = []
+    for event in target.events:
+        normalized.append(
+            RuntimeEvent(
+                name=normalize_runtime_event_name(event.name),
+                payload=event.payload,
+                tick=event.tick,
+            )
+        )
+    return normalized
 
 
 def update_runtime_snapshot(snapshot: RuntimeSnapshot) -> RuntimeSnapshot:
@@ -156,7 +224,13 @@ def press_runtime_action(action: str, *, pressed: bool = True) -> RuntimeSnapsho
 
 def record_runtime_event(name: str, payload: str = "", *, tick: int | None = None) -> RuntimeSnapshot:
     snapshot = _ensure_snapshot()
-    snapshot.events.append(RuntimeEvent(name=name, payload=payload, tick=tick if tick is not None else snapshot.current_tick))
+    snapshot.events.append(
+        RuntimeEvent(
+            name=normalize_runtime_event_name(name),
+            payload=payload,
+            tick=tick if tick is not None else snapshot.current_tick,
+        )
+    )
     return _touch_snapshot(snapshot, source="synthetic", evidence_level="low", bridge_connected=False)
 
 
@@ -192,6 +266,7 @@ def runtime_state_dict(snapshot: RuntimeSnapshot | None = None) -> dict[str, Any
         "active_scene": target.active_scene,
         "current_tick": target.current_tick,
         "state": dict(target.state),
+        "contract_state": runtime_contract_state(target),
         "fixtures": dict(target.fixtures),
         "active_inputs": list(target.active_inputs),
     }
@@ -206,7 +281,12 @@ def add_runtime_screenshot(path: str) -> RuntimeSnapshot:
 
 def runtime_snapshot_dict(snapshot: RuntimeSnapshot | None = None) -> dict:
     target = snapshot or _snapshot
-    return asdict(target) if target is not None else {}
+    if target is None:
+        return {}
+    data = asdict(target)
+    data["contract_state"] = runtime_contract_state(target)
+    data["contract_events"] = [asdict(event) for event in runtime_contract_events(target)]
+    return data
 
 
 def format_runtime_snapshot(snapshot: RuntimeSnapshot | None) -> str:
@@ -234,6 +314,11 @@ def format_runtime_snapshot(snapshot: RuntimeSnapshot | None) -> str:
     if snapshot.state:
         lines.append("- State:")
         for key, value in list(snapshot.state.items())[:10]:
+            lines.append(f"  - {key}: {value}")
+    contract_state = runtime_contract_state(snapshot)
+    if contract_state:
+        lines.append("- Contract State:")
+        for key, value in list(contract_state.items())[:10]:
             lines.append(f"  - {key}: {value}")
     if snapshot.fixtures:
         lines.append("- Fixtures: " + ", ".join(list(snapshot.fixtures.keys())[:10]))

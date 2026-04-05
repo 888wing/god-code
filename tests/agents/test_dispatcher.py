@@ -74,7 +74,7 @@ class TestAgentDispatcher:
             project_path=str(project_root),
         )
 
-        async def fake_review_changes(*, project_root, changed_files, godot_path, quality_report):
+        async def fake_review_changes(*, project_root, changed_files, godot_path, quality_report, runtime_snapshot=None):
             from godot_agent.runtime.reviewer import ReviewCheck, ReviewReport
 
             return ReviewReport(

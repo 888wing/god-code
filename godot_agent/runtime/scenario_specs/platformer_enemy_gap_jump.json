@@ -1,0 +1,63 @@
+{
+  "id": "platformer_enemy_gap_jump",
+  "title": "Platformer Enemy Gap Jump",
+  "description": "Check that a platformer enemy encounter preserves a readable jump window and recovery space.",
+  "genres": ["platformer_enemy"],
+  "testing_focus": ["combat_feedback"],
+  "steps": [
+    {
+      "title": "Replay gap-jump route",
+      "action": "scripted_route",
+      "route_segments": [
+        {
+          "press": ["move_right"],
+          "ticks": 75,
+          "state_updates": {
+            "enemies_alive": 2,
+            "player_lives": 3,
+            "screen_flash": 0
+          },
+          "events": [
+            { "name": "jump_window_open" }
+          ],
+          "capture_as": "approach"
+        },
+        {
+          "press": ["jump"],
+          "ticks": 45,
+          "state_updates": {
+            "enemies_alive": 1,
+            "player_lives": 2,
+            "screen_flash": 1
+          },
+          "events": [
+            { "name": "player_hit" },
+            { "name": "hit_feedback" }
+          ],
+          "capture_as": "landing"
+        }
+      ],
+      "expect_events": ["jump_window_open", "hit_feedback"],
+      "sample_asserts": [
+        {
+          "label": "landing still clears pressure",
+          "left_sample": "approach",
+          "left_key": "enemies_alive",
+          "op": ">",
+          "right_sample": "landing",
+          "right_key": "enemies_alive"
+        },
+        {
+          "label": "player survives jump window",
+          "left_sample": "landing",
+          "left_key": "player_lives",
+          "op": ">=",
+          "value": 1
+        }
+      ]
+    }
+  ],
+  "source": "manual",
+  "confidence": "medium",
+  "evidence_policy": "require_live_for_pass"
+}

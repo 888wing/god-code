@@ -1,0 +1,10 @@
+{
+  "id": "demo_combat_feedback",
+  "title": "Demo Combat Feedback",
+  "description": "Check that hit, death, and telegraph feedback exist when the project targets demo quality.",
+  "quality_targets": ["demo"],
+  "path_contains": ["player", "enemy", "boss", "hud", "combat"],
+  "source": "manual",
+  "confidence": "medium",
+  "evidence_policy": "require_live_for_pass"
+}
