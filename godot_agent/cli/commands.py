@@ -159,7 +159,7 @@ _PROVIDERS = {
 }
 
 
-_VERSION = "0.6.1"
+_VERSION = "0.8.0"
 
 
 def _is_configured() -> bool:
