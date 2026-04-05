@@ -1,6 +1,8 @@
 from godot_agent.runtime.design_memory import CombatProfile, DesignMemory, GameplayIntentProfile
 from godot_agent.runtime.intent_resolver import (
+    _project_signal_tokens,
     apply_intent_answers,
+    clear_token_cache,
     gameplay_profile_to_skill_keys,
     resolve_gameplay_intent,
     should_prompt_for_intent,
@@ -123,6 +125,34 @@ def test_apply_intent_answers_preserves_confirmed_profile_shape_when_genre_is_un
     assert updated.testing_focus == ["wave_timing", "pattern_readability", "boss_phase_clear"]
     assert updated.combat_profile.bullet_cleanup_policy == "phase_transition_and_timeout"
     assert updated.confirmed is True
+
+
+def test_token_cache_avoids_rescan(tmp_path):
+    """Second call to _project_signal_tokens returns cached result without re-scanning."""
+    clear_token_cache()
+    _write_project(tmp_path, actions=["shoot"])
+    # First call scans
+    tokens1 = _project_signal_tokens(tmp_path)
+    # Second call hits cache
+    tokens2 = _project_signal_tokens(tmp_path)
+    assert tokens1 is tokens2  # Same object = cached
+    clear_token_cache()
+
+
+def test_token_cache_invalidates_on_different_root(tmp_path):
+    """Cache is invalidated when project_root changes."""
+    clear_token_cache()
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    _write_project(dir_a, actions=["shoot"])
+    _write_project(dir_b, actions=["jump"])
+
+    tokens_a = _project_signal_tokens(dir_a)
+    tokens_b = _project_signal_tokens(dir_b)
+    assert tokens_a is not tokens_b  # Different roots = different results
+    clear_token_cache()
 
 
 def test_gameplay_profile_maps_to_genre_skill():

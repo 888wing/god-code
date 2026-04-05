@@ -64,11 +64,26 @@ _GENRE_TO_SKILLS: dict[str, tuple[str, ...]] = {
 }
 
 
+_cached_tokens: tuple[set[str], set[str], tuple[int, int]] | None = None
+_cache_project_root: Path | None = None
+
+
+def clear_token_cache() -> None:
+    """Reset the token cache. Useful for tests and when the project changes."""
+    global _cached_tokens, _cache_project_root
+    _cached_tokens = None
+    _cache_project_root = None
+
+
 def _tokenize(value: str) -> set[str]:
     return {token for token in re.split(r"[^a-z0-9_]+", value.lower()) if token}
 
 
 def _project_signal_tokens(project_root: Path) -> tuple[set[str], set[str], tuple[int, int]]:
+    global _cached_tokens, _cache_project_root
+    if _cached_tokens is not None and _cache_project_root == project_root:
+        return _cached_tokens
+
     tokens: set[str] = set()
     input_actions: set[str] = set()
     viewport = (1920, 1080)
@@ -93,7 +108,10 @@ def _project_signal_tokens(project_root: Path) -> tuple[set[str], set[str], tupl
             if len(file_tokens) > 2000:
                 break
     tokens.update(file_tokens)
-    return tokens, input_actions, viewport
+    result = tokens, input_actions, viewport
+    _cached_tokens = result
+    _cache_project_root = project_root
+    return result
 
 
 def _score_genres(user_hint: str, tokens: set[str], input_actions: set[str], viewport: tuple[int, int]) -> dict[str, float]:
