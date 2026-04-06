@@ -5,6 +5,7 @@ import logging
 import httpx
 
 from godot_agent.llm.adapters import get_provider_adapter
+from godot_agent.llm.redact import redact_secrets
 from godot_agent.llm.types import ChatResponse, ComputerUseResponse, LLMConfig, Message, TokenUsage, ToolCall
 from godot_agent.runtime.providers import infer_provider
 
@@ -74,7 +75,7 @@ class LLMClient:
                 error_msg = error_body.get("error", {}).get("message", resp.text[:200])
                 if "content filtering" in error_msg.lower() or "content_filter" in error_msg.lower():
                     if attempt < 4:
-                        log.warning("Content filter triggered, retrying (attempt %d/5): %s", attempt + 1, error_msg[:100])
+                        log.warning("Content filter triggered, retrying (attempt %d/5): %s", attempt + 1, redact_secrets(error_msg[:100]))
                         await _asyncio.sleep(1)
                         continue
                     # Final attempt — return a safe fallback message
@@ -147,7 +148,7 @@ class LLMClient:
                     detail = err_obj.get("message", "") if isinstance(err_obj, dict) else str(err_obj)
                 except Exception:
                     detail = resp.text[:200]
-                log.error("Backend API error %d: %s", resp.status_code, detail)
+                log.error("Backend API error %d: %s", resp.status_code, redact_secrets(detail))
             break
         resp.raise_for_status()
         data = resp.json()
@@ -217,7 +218,7 @@ class LLMClient:
                 detail_msg = err_obj.get("message", "") if isinstance(err_obj, dict) else str(err_obj)
             except Exception:
                 detail_msg = resp.text[:200]
-            log.error("computer_use API error %d: %s", resp.status_code, detail_msg)
+            log.error("computer_use API error %d: %s", resp.status_code, redact_secrets(detail_msg))
         resp.raise_for_status()
         return self.adapter.parse_computer_use_response(resp.json())
 

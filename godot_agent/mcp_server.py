@@ -31,6 +31,43 @@ def _root() -> Path:
     return _project_root or Path.cwd()
 
 
+# File extensions the MCP server is allowed to read/write. Keeping this
+# narrow stops a malicious prompt from asking the server to read
+# ~/.config/god-code/config.json or ~/.ssh/id_rsa via any tool that takes
+# a file_path argument.
+_ALLOWED_MCP_EXTS = {
+    ".gd", ".tscn", ".tres", ".cfg", ".gdshader", ".gdshaderinc",
+    ".shader", ".json", ".md", ".txt", ".import", ".godot",
+}
+
+
+def _contained_path(file_path: str, *, must_exist: bool = True) -> Path:
+    """Resolve file_path, enforce it lies inside _root(), and gate by extension.
+
+    Raises ValueError if the path escapes the project root or uses a
+    non-allowlisted extension. FastMCP turns raised exceptions into
+    structured error responses for the client.
+    """
+    if not file_path:
+        raise ValueError("file_path is required")
+    p = Path(file_path).expanduser().resolve()
+    root = _root().resolve()
+    try:
+        p.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(
+            f"Access denied: {file_path} is outside project root {root}"
+        ) from exc
+    if p.suffix.lower() not in _ALLOWED_MCP_EXTS:
+        raise ValueError(
+            f"Access denied: extension '{p.suffix}' is not permitted "
+            f"(allowed: {sorted(_ALLOWED_MCP_EXTS)})"
+        )
+    if must_exist and not p.exists():
+        raise ValueError(f"File not found: {p}")
+    return p
+
+
 def _godot_path() -> str:
     config_file = Path.home() / ".config" / "god-code" / "config.json"
     if config_file.exists():
@@ -70,11 +107,12 @@ async def validate_project(project_path: str = "") -> dict:
 def validate_tscn(file_path: str, auto_fix: bool = False) -> dict:
     """Validate .tscn format. Optionally auto-fix ordering issues (sub_resource before node, load_steps count)."""
     from godot_agent.godot.tscn_validator import validate_tscn as _validate, validate_and_fix
-    text = Path(file_path).read_text(errors="replace")
+    p = _contained_path(file_path)
+    text = p.read_text(errors="replace")
     if auto_fix:
         fixed_text, issues = validate_and_fix(text)
         if fixed_text != text:
-            Path(file_path).write_text(fixed_text)
+            p.write_text(fixed_text)
         return {"fixed": fixed_text != text, "remaining_issues": [str(i) for i in issues]}
     issues = _validate(text)
     return {"issues": [str(i) for i in issues], "has_errors": any(i.severity == "error" for i in issues)}
@@ -84,10 +122,11 @@ def validate_tscn(file_path: str, auto_fix: bool = False) -> dict:
 def lint_script(file_path: str) -> dict:
     """Lint GDScript for naming, ordering, type annotations, and anti-patterns."""
     from godot_agent.godot.gdscript_linter import lint_gdscript, format_lint_report
-    text = Path(file_path).read_text(errors="replace")
-    issues = lint_gdscript(text, filename=Path(file_path).name)
+    p = _contained_path(file_path)
+    text = p.read_text(errors="replace")
+    issues = lint_gdscript(text, filename=p.name)
     return {
-        "report": format_lint_report(issues, Path(file_path).name),
+        "report": format_lint_report(issues, p.name),
         "error_count": sum(1 for i in issues if i.severity == "error"),
         "warning_count": sum(1 for i in issues if i.severity == "warning"),
     }
@@ -135,7 +174,7 @@ def suggest_patterns(project_path: str = "") -> dict:
 def parse_scene(file_path: str) -> dict:
     """Parse .tscn into structured data: nodes, resources, connections, node paths."""
     from godot_agent.godot.scene_parser import parse_tscn
-    scene = parse_tscn(Path(file_path).read_text(errors="replace"))
+    scene = parse_tscn(_contained_path(file_path).read_text(errors="replace"))
     return {
         "nodes": [{"name": n.name, "type": n.type, "parent": n.parent, "properties": n.properties} for n in scene.nodes],
         "ext_resources": [{"type": r.type, "path": r.path, "id": r.id} for r in scene.ext_resources],
@@ -165,7 +204,7 @@ def godot_knowledge(topic: str) -> dict:
 def validate_resources(file_path: str, project_path: str = "") -> dict:
     """Check all ext_resource paths in a .tscn exist on disk."""
     from godot_agent.godot.resource_validator import validate_resources as _validate
-    issues = _validate(Path(file_path), project_root=Path(project_path) if project_path else _root())
+    issues = _validate(_contained_path(file_path), project_root=_root())
     return {"valid": len(issues) == 0, "missing": issues}
 
 
@@ -186,7 +225,7 @@ def validate_ui_layout(file_path: str) -> dict:
     from godot_agent.godot.scene_parser import parse_tscn
     from godot_agent.godot.ui_layout_advisor import validate_ui_layout as _validate
 
-    scene = parse_tscn(Path(file_path).read_text(errors="replace"))
+    scene = parse_tscn(_contained_path(file_path).read_text(errors="replace"))
     warnings = _validate(scene)
     return {"warning_count": len(warnings), "warnings": warnings, "summary": "\n".join(warnings) if warnings else "No UI layout issues found."}
 
@@ -206,8 +245,8 @@ def validate_audio_nodes(file_path: str, project_path: str = "") -> dict:
     from godot_agent.godot.audio_scaffolder import validate_audio_nodes as _validate
     from godot_agent.godot.scene_parser import parse_tscn
 
-    root = Path(project_path) if project_path else _root()
-    scene = parse_tscn(Path(file_path).read_text(errors="replace"))
+    root = _root()
+    scene = parse_tscn(_contained_path(file_path).read_text(errors="replace"))
     warnings = _validate(scene, root)
     return {"warning_count": len(warnings), "warnings": warnings, "summary": "\n".join(warnings) if warnings else "No audio node issues found."}
 
@@ -228,9 +267,10 @@ def write_scene(file_path: str, content: str) -> dict:
     errors = [i for i in issues if i.severity == "error"]
     if errors:
         return {"written": False, "errors": [str(e) for e in errors]}
-    Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(file_path).write_text(fixed_text, encoding="utf-8")
-    return {"written": True, "path": file_path, "auto_fixed": fixed_text != content,
+    p = _contained_path(file_path, must_exist=False)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(fixed_text, encoding="utf-8")
+    return {"written": True, "path": str(p), "auto_fixed": fixed_text != content,
             "warnings": [str(i) for i in issues if i.severity == "warning"]}
 
 
@@ -248,10 +288,11 @@ def add_scene_node(file_path: str, parent: str, name: str, node_type: str,
     """
     from godot_agent.godot.scene_writer import add_node
     from godot_agent.godot.tscn_validator import validate_and_fix
-    text = Path(file_path).read_text(errors="replace")
+    p = _contained_path(file_path)
+    text = p.read_text(errors="replace")
     new_text = add_node(text, parent=parent, name=name, type=node_type, properties=properties)
     fixed, issues = validate_and_fix(new_text)
-    Path(file_path).write_text(fixed, encoding="utf-8")
+    p.write_text(fixed, encoding="utf-8")
     return {"added": True, "node": f"{name} ({node_type})", "parent": parent,
             "warnings": [str(i) for i in issues if i.severity == "warning"]}
 
@@ -267,9 +308,10 @@ def set_scene_property(file_path: str, node_name: str, key: str, value: object) 
         value: Property value as Godot string (e.g., "Vector2(10, 20)", '"Hello"', "true")
     """
     from godot_agent.godot.scene_writer import set_node_property
-    text = Path(file_path).read_text(errors="replace")
+    p = _contained_path(file_path)
+    text = p.read_text(errors="replace")
     new_text = set_node_property(text, node_name=node_name, key=key, value=value)
-    Path(file_path).write_text(new_text, encoding="utf-8")
+    p.write_text(new_text, encoding="utf-8")
     return {"set": True, "node": node_name, "property": f"{key} = {value}"}
 
 
@@ -285,10 +327,11 @@ def add_signal_connection(file_path: str, signal_name: str, from_node: str,
         method: Handler method name (e.g., "_on_button_pressed")
     """
     from godot_agent.godot.scene_writer import add_connection
-    text = Path(file_path).read_text(errors="replace")
+    p = _contained_path(file_path)
+    text = p.read_text(errors="replace")
     new_text = add_connection(text, signal_name=signal_name, from_node=from_node,
                               to_node=to_node, method=method)
-    Path(file_path).write_text(new_text, encoding="utf-8")
+    p.write_text(new_text, encoding="utf-8")
     return {"connected": True, "signal": signal_name, "from": from_node, "to": to_node, "method": method}
 
 
@@ -298,12 +341,13 @@ def write_script(file_path: str, content: str, lint: bool = True) -> dict:
 
     Use this instead of writing .gd files directly. Runs the linter and returns issues.
     """
-    Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(file_path).write_text(content, encoding="utf-8")
-    result = {"written": True, "path": file_path}
+    p = _contained_path(file_path, must_exist=False)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    result = {"written": True, "path": str(p)}
     if lint:
         from godot_agent.godot.gdscript_linter import lint_gdscript
-        issues = lint_gdscript(content, filename=Path(file_path).name)
+        issues = lint_gdscript(content, filename=p.name)
         result["lint_errors"] = sum(1 for i in issues if i.severity == "error")
         result["lint_warnings"] = sum(1 for i in issues if i.severity == "warning")
         if issues:

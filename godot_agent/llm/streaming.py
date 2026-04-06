@@ -6,6 +6,7 @@ import json
 from typing import Callable
 
 from godot_agent.llm.client import ChatResponse, LLMClient, Message, ToolCall, TokenUsage
+from godot_agent.llm.redact import redact_secrets
 
 
 async def stream_chat_with_callback(
@@ -89,7 +90,7 @@ async def _consume_sse_stream(
                     break
             import logging
             log = logging.getLogger(__name__)
-            log.error("Stream request failed %d: %s", resp.status_code, error_text[:300])
+            log.error("Stream request failed %d: %s", resp.status_code, redact_secrets(error_text[:300]))
         resp.raise_for_status()
         async for line in resp.aiter_lines():
             if not line.startswith("data: "):

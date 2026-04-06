@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 
 from pydantic import BaseModel, Field
@@ -20,12 +21,50 @@ def set_safety_level(level: str) -> None:
     global _safety_level
     _safety_level = level
 
+# Environment variables that may carry credentials/secrets — filtered from
+# subprocess env so commands like `env` cannot exfiltrate them. Matches any
+# name containing these substrings (case-insensitive).
+_SECRET_ENV_SUBSTRING = re.compile(
+    r'(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|PRIVATE|CERT)',
+    re.IGNORECASE,
+)
+
+
+def _build_safe_env() -> dict[str, str]:
+    """Return a copy of os.environ with credential-bearing variables removed.
+
+    This is defense-in-depth against an LLM being tricked into running `env`,
+    `printenv`, or `cat $SECRET_FILE`: even if the command executes, the
+    sensitive environment values are not available to the subprocess.
+    """
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not _SECRET_ENV_SUBSTRING.search(name)
+    }
+
 # Patterns blocked at each safety level
 _ALWAYS_BLOCKED = [
     r'\brm\s+-rf\s+/',        # rm -rf /
     r'\brm\s+-rf\s+~',        # rm -rf ~
     r'\bmkfs\b',              # format disk
     r'\bdd\s+if=',            # dd disk operations
+    # Credential file access (read or write)
+    r'\.config/god-code',     # god-code config + oauth store
+    r'\.codex/auth',          # Codex CLI credentials
+    r'\.aws/credentials',     # AWS credentials file
+    r'\.ssh/id_',             # SSH private keys
+    r'\.ssh/authorized_keys', # SSH authorized keys (tampering)
+    r'\.netrc',               # ~/.netrc credential store
+    r'\.npmrc',               # npm auth tokens
+    r'\.pypirc',              # PyPI credentials
+    # Environment dumping (env VAR=val cmd is still allowed because
+    # the `VAR=val` form is typed directly as a shell prefix, not via `env`)
+    r'\bprintenv\b',                              # printenv dumps all or one var
+    r'(^|[|;&`]|\|\|)\s*env\s*($|[|;&`])',        # bare `env` or `... | env`
+    r'(^|[|;&`]|\|\|)\s*env\s+-',                 # `env -i`, `env -u VAR`
+    r'(^|[|;&`]|\|\|)\s*set\s*($|\|)',            # bare `set` (dumps shell vars)
+    r'(^|[|;&`]|\|\|)\s*export\s*($|\|)',         # bare `export` (lists exports)
 ]
 
 _NORMAL_BLOCKED = _ALWAYS_BLOCKED + [
@@ -96,6 +135,7 @@ class RunShellTool(BaseTool):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
+                env=_build_safe_env(),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=input.timeout)
             return ToolResult(output=self.Output(

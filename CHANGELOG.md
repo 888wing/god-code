@@ -4,6 +4,14 @@ All notable changes to God Code will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+- **run_shell hardened** against credential exfiltration: subprocess environment is now filtered to drop any variable whose name contains KEY/TOKEN/SECRET/PASSWORD/PASSWD/CREDENTIAL/AUTH/PRIVATE/CERT, and `env`, `printenv`, `set`, `export`, and reads of `.config/god-code`, `.codex/auth`, `.aws/credentials`, `.ssh/id_*`, `.ssh/authorized_keys`, `.netrc`, `.npmrc`, `.pypirc` are now blocked at all safety levels.
+- **Session files** (`~/.agent_sessions/*.json`) are now `chmod 0o600` on write so tool outputs captured in conversation history are not world-readable.
+- **Atomic secure writes** for `~/.config/god-code/config.json` and `~/.config/god-code/auth.json`: files are created via `tempfile` + `os.fchmod(0o600)` + `os.replace`, eliminating the TOCTOU window where an earlier `write_text` produced a briefly 0o644 file.
+- **MCP server path containment**: every `file_path` argument to MCP tools is validated against the active project root with `Path.relative_to`, and a `.gd/.tscn/.tres/.cfg/.gdshader/.json/.md/.txt/.import` extension allowlist, preventing a misbehaving MCP client from reading or writing arbitrary files such as `~/.config/god-code/config.json`.
+- **Prefix confusion fix** in `file_ops._validate_path`: `startswith` replaced with `Path.relative_to`, so a project rooted at `/proj/my-game` no longer accidentally permits access to `/proj/my-game-secrets/`.
+- **Log redaction** (`godot_agent/llm/redact.py`): a new `redact_secrets` helper masks Bearer tokens, `sk-*` keys, `gc_live_*` keys, and JWT triples in any error string before it is handed to `log.error`/`log.warning`. Applied to backend, streaming, and computer-use error paths in `llm/client.py` and `llm/streaming.py`.
+
 ### Added
 - Workspace-style chat TUI with session snapshot, recent activity, and live streaming panels
 - Interaction modes (`apply`, `plan`, `explain`, `review`, `fix`) with mode-aware tool availability

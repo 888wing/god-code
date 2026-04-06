@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import click
@@ -81,9 +83,28 @@ from godot_agent.tools.vision_scoring import ScoreScreenshotTool
 # ── config persistence ─────────────────────────────────────────
 
 def _save_config_data(config_path: Path, data: dict) -> Path:
+    """Write config atomically with 0o600 permissions from creation.
+
+    Uses tempfile + fchmod + os.replace so there is never a moment where the
+    file exists on disk with umask-default (world-readable) permissions.
+    """
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(data, indent=2))
-    config_path.chmod(0o600)
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{config_path.name}.",
+        suffix=".tmp",
+        dir=str(config_path.parent),
+    )
+    try:
+        os.fchmod(tmp_fd, 0o600)
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_name, config_path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     return config_path
 
 

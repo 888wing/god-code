@@ -96,6 +96,15 @@ def save_session(
         "messages": [m.to_dict() for m in messages],
     }
     file_path.write_text(json.dumps(data, indent=2))
+    # Session files may contain tool outputs (shell stdout, file contents)
+    # that could include credentials if the LLM reads or execs something
+    # sensitive. Restrict to owner-only read/write.
+    try:
+        file_path.chmod(0o600)
+    except OSError:
+        # chmod can fail on exotic filesystems (e.g. SMB/NTFS mounts);
+        # not worth failing the save over.
+        pass
     return file_path
 
 

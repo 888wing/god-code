@@ -25,10 +25,18 @@ def clear_project_root() -> None:
 
 
 def _validate_path(path_str: str) -> tuple[Path, str | None]:
-    """Resolve and validate a path is within project root. Returns (path, error)."""
+    """Resolve and validate a path is within project root. Returns (path, error).
+
+    Uses ``Path.relative_to`` instead of string ``startswith`` so that
+    sibling directories sharing a prefix (e.g. ``/proj/game`` vs
+    ``/proj/game-secrets``) are correctly rejected.
+    """
     p = Path(path_str).resolve()
-    if _project_root and not str(p).startswith(str(_project_root)):
-        return p, f"Access denied: {path_str} is outside project root {_project_root}"
+    if _project_root is not None:
+        try:
+            p.relative_to(_project_root)
+        except ValueError:
+            return p, f"Access denied: {path_str} is outside project root {_project_root}"
     return p, None
 
 

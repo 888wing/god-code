@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import time
 from pathlib import Path
 
@@ -64,7 +65,7 @@ def refresh_access_token(refresh_token: str) -> dict:
 
 
 def _save_tokens(token_data: dict) -> Path:
-    """Save tokens to ~/.config/god-code/auth.json."""
+    """Save tokens to ~/.config/god-code/auth.json atomically with 0o600."""
     AUTH_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
     store = {
         "access_token": token_data.get("access_token", ""),
@@ -73,9 +74,24 @@ def _save_tokens(token_data: dict) -> Path:
         "expires_at": time.time() + token_data.get("expires_in", 3600),
         "last_refresh": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
-    AUTH_STORE_PATH.write_text(json.dumps(store, indent=2))
-    # Secure the file
-    AUTH_STORE_PATH.chmod(0o600)
+    # Atomic write: tempfile + fchmod + rename so the file never exists on
+    # disk with umask-default permissions, even briefly.
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{AUTH_STORE_PATH.name}.",
+        suffix=".tmp",
+        dir=str(AUTH_STORE_PATH.parent),
+    )
+    try:
+        os.fchmod(tmp_fd, 0o600)
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(store, f, indent=2)
+        os.replace(tmp_name, AUTH_STORE_PATH)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     return AUTH_STORE_PATH
 
 
