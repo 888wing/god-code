@@ -523,6 +523,7 @@ def chat(project: str = ".", config: str | None = None):
     has_project, proj_name, project_info = _project_details(project_root)
 
     engine = _pkg_attr("build_engine", _build_engine_impl)(cfg, project_root)
+    engine.session_id = session_id
     _wire_engine_callbacks(engine, display, cfg)
     display.welcome(
         session_id,
@@ -609,6 +610,10 @@ def chat(project: str = ".", config: str | None = None):
         has_project, proj_name, project_info = _project_details(project_root)
         engine = _pkg_attr("build_engine", _build_engine_impl)(cfg, project_root)
         _wire_engine_callbacks(engine, display, cfg)
+        if new_session_id is not None:
+            engine.session_id = new_session_id
+        else:
+            engine.session_id = session_id
 
         carried_messages = seed_messages if seed_messages is not None else old_messages
         if carried_messages:
