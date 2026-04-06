@@ -118,6 +118,7 @@ class ConversationEngine:
         project_path: str | None = None,
         godot_path: str = "godot",
         auto_validate: bool = True,
+        session_id: str = "",
         prompt_assembler: PromptAssembler | None = None,
         mode: str = "apply",
         dispatcher: "AgentDispatcher | None" = None,
@@ -129,6 +130,7 @@ class ConversationEngine:
         self.project_path = project_path
         self.godot_path = godot_path
         self.auto_validate = auto_validate
+        self.session_id = session_id or str(__import__('uuid').uuid4())[:8]
         self.prompt_assembler = prompt_assembler
         self.mode = mode
         self.dispatcher = dispatcher
