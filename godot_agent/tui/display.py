@@ -191,6 +191,7 @@ class ChatDisplay:
         t.add_row("/save", "save session snapshot")
         t.add_row("/load", "alias for /resume latest")
         t.add_row("/workspace", "show the workspace snapshot")
+        t.add_row("/auto <request>", "plan, approve, and auto-execute a task")
         t.add_row("/menu", "open the interactive command menu")
         t.add_row("/version", "show current version and check for updates")
         t.add_row("/exit", "exit (also: /quit, Ctrl+C)")
