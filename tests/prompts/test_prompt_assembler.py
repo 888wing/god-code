@@ -116,3 +116,30 @@ def test_prompt_assembler_respects_manual_skill_override(tmp_path):
     )
 
     assert "Collision Architecture" in prompt
+
+
+def test_proactive_rules_in_prompt(tmp_path):
+    from godot_agent.prompts.assembler import PromptAssembler, PromptContext
+    (tmp_path / "project.godot").write_text('config_version=5\n\n[application]\nconfig/name="RulesGame"\n')
+    ctx = PromptContext(project_root=tmp_path, mode="apply")
+    assembler = PromptAssembler(ctx)
+    prompt = assembler.build(user_hint="test")
+    assert "When to Pause" in prompt
+
+
+def test_auto_mode_plan_format_in_prompt(tmp_path):
+    from godot_agent.prompts.assembler import PromptAssembler, PromptContext
+    (tmp_path / "project.godot").write_text('config_version=5\n\n[application]\nconfig/name="PlanGame"\n')
+    ctx = PromptContext(project_root=tmp_path, mode="apply")
+    assembler = PromptAssembler(ctx)
+    prompt = assembler.build(user_hint="test", auto_mode=True)
+    assert "### Plan:" in prompt
+
+
+def test_auto_mode_off_no_plan_format(tmp_path):
+    from godot_agent.prompts.assembler import PromptAssembler, PromptContext
+    (tmp_path / "project.godot").write_text('config_version=5\n\n[application]\nconfig/name="NoPlanGame"\n')
+    ctx = PromptContext(project_root=tmp_path, mode="apply")
+    assembler = PromptAssembler(ctx)
+    prompt = assembler.build(user_hint="test", auto_mode=False)
+    assert "### Plan:" not in prompt

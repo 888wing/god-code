@@ -63,6 +63,37 @@ class PromptAssembler:
         sections.append(SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
         return "\n\n".join(sections)
 
+    def _proactive_rules_section(self) -> str:
+        return """## When to Pause and Ask
+
+Before making changes, assess scope. If your plan would:
+- Modify 5+ files → state the scope and ask "proceed?"
+- Delete anything → list what will be removed and confirm
+- Conflict with design memory → quote the conflict and ask
+
+When the request is vague ("fix the UI", "improve performance"):
+- List what you found and ask which to address
+- Do NOT guess and act on all of them
+
+Proceed without asking when scope is clear, contained (1-3 files), and reversible."""
+
+    def _auto_plan_format_section(self) -> str:
+        return """## Plan Output Format
+
+Output plans in this format:
+
+### Plan: [title]
+
+**Scope**: [N] files | **Risk**: low/medium/high | **Steps**: [N]
+
+1. [action] [target] — [description]
+   Files: `path/file.gd`
+
+2. [action] [target] — [description]
+   Files: `path/file.tscn`
+
+Risks: [if any]"""
+
     def build(
         self,
         *,
@@ -80,6 +111,7 @@ class PromptAssembler:
         quality_report: QualityGateReport | None = None,
         review_report: ReviewReport | None = None,
         playtest_report: PlaytestReport | None = None,
+        auto_mode: bool = False,
     ) -> str:
         sections = [self._static_prompt]
 
@@ -130,6 +162,12 @@ class PromptAssembler:
 
         if self.context.extra_prompt:
             sections.append(f"## Custom Instructions\n\n{self.context.extra_prompt}")
+
+        # Add proactive rules always
+        sections.append(self._proactive_rules_section())
+        # Add auto plan format when in auto mode
+        if auto_mode:
+            sections.append(self._auto_plan_format_section())
 
         return "\n\n".join(section for section in sections if section.strip())
 
