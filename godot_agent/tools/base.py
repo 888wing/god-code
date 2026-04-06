@@ -47,8 +47,11 @@ class BaseTool(ABC):
         }
         if strict:
             schema["function"]["strict"] = True
-            # Structured outputs requires additionalProperties: false
             params = schema["function"]["parameters"]
+            # Structured outputs requires additionalProperties: false
             if "additionalProperties" not in params:
                 params["additionalProperties"] = False
+            # Strict mode requires ALL properties listed in 'required'
+            if "properties" in params:
+                params["required"] = sorted(params["properties"].keys())
         return schema
