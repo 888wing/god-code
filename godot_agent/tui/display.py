@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import difflib
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.columns import Columns
 from rich.console import Console, Group
@@ -17,6 +17,9 @@ from rich.text import Text
 from godot_agent.runtime.events import EngineEvent
 from godot_agent.runtime.modes import get_mode_spec
 from godot_agent.tui.input_handler import MenuOption
+
+if TYPE_CHECKING:
+    from godot_agent.runtime.execution_plan import ExecutionPlan
 
 
 class ChatDisplay:
@@ -649,6 +652,32 @@ class ChatDisplay:
         spec = get_mode_spec(mode)
         body = f"{spec.label}\n\n{spec.description}"
         self.console.print(Panel(body, title="Interaction Mode", border_style="magenta"))
+
+    def plan_panel(self, plan: ExecutionPlan) -> None:
+        """Rich panel showing all plan steps with status icons."""
+        from godot_agent.runtime.execution_plan import ExecutionPlan  # noqa: F811
+
+        t = Table(show_header=False, box=None, padding=(0, 1))
+        t.add_column(width=3)  # icon
+        t.add_column()          # step description
+        t.add_column(style="dim")  # summary/files
+        STATUS_ICONS = {"done": "[green]OK[/]", "running": "[yellow]>>[/]", "pending": "[dim]..[/]",
+                        "approved": "[dim]..[/]", "failed": "[red]!![/]", "skipped": "[dim]--[/]"}
+        for s in plan.steps:
+            icon = STATUS_ICONS.get(s.status, "  ")
+            desc = f"{s.index}. {s.action} {s.target}"
+            info = s.summary if s.summary else ", ".join(s.files[:2])
+            t.add_row(icon, desc, f"[dim]{info}[/]")
+        progress = f"Progress: {plan.done_count}/{plan.total_actionable}"
+        panel = Panel(Group(t, Text(progress, style="dim")), title=f"Plan: {plan.title}", border_style="green")
+        self.console.print(panel)
+
+    def plan_status_line(self, plan: ExecutionPlan) -> str:
+        """One-line status for persistent display during auto execution."""
+        step = plan.current_step
+        if not step:
+            return f"[green]Plan complete: {plan.done_count}/{plan.total_actionable}[/]"
+        return f"[yellow]Step {step.index}/{plan.total_actionable}: {step.action} {step.target}...[/]"
 
     def menu_panel(
         self,
