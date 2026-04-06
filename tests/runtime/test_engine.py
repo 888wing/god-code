@@ -439,3 +439,7 @@ def test_engine_current_plan_init():
         system_prompt="test",
     )
     assert engine.current_plan is None
+
+
+def test_engine_has_check_health():
+    assert hasattr(ConversationEngine, '_check_auto_health')

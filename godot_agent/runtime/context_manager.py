@@ -251,3 +251,22 @@ def prune_system_reports(messages: list[Message], max_reports: int = 2) -> list[
         return messages
     to_remove = set(report_indices[:-max_reports])
     return [m for i, m in enumerate(messages) if i not in to_remove]
+
+
+def compress_step_messages(messages: list[Message], completed_step_index: int, summary: str) -> list[Message]:
+    """Replace a completed step's messages with a 1-line summary."""
+    marker = f"[AUTO] Execute step {completed_step_index}:"
+    next_marker = f"[AUTO] Execute step {completed_step_index + 1}:"
+    start = None
+    end = len(messages)
+    for i, m in enumerate(messages):
+        content = m.content if isinstance(m.content, str) else ""
+        if marker in content and start is None:
+            start = i
+        elif start is not None and (next_marker in content or content.startswith("[AUTO]")):
+            end = i
+            break
+    if start is None:
+        return messages
+    summary_msg = Message.user(f"[Step {completed_step_index} done: {summary}]")
+    return messages[:start] + [summary_msg] + messages[end:]

@@ -114,3 +114,22 @@ def test_prune_keeps_all_when_under_limit():
     ]
     pruned = prune_system_reports(messages, max_reports=2)
     assert len(pruned) == 2
+
+
+from godot_agent.runtime.context_manager import compress_step_messages
+
+def test_compress_step_messages():
+    from godot_agent.llm.types import Message
+    messages = [
+        Message.system("sys"),
+        Message.user("do something earlier"),
+        Message.user("[AUTO] Execute step 1: create boss.gd"),
+        Message.assistant(content="I'll create the file", tool_calls=[]),
+        Message.user('{"output": "' + 'x' * 3000 + '"}'),
+        Message.user("[SYSTEM] Quality gate: passed"),
+        Message.user("[AUTO] Execute step 2: modify spawner"),
+    ]
+    compressed = compress_step_messages(messages, completed_step_index=1, summary="created boss.gd +45 lines")
+    assert len(compressed) < len(messages)
+    step_summary = [m for m in compressed if "Step 1 done" in (m.content or "")]
+    assert len(step_summary) == 1

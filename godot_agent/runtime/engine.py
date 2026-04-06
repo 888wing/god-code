@@ -13,7 +13,7 @@ from godot_agent.godot.impact_analysis import ImpactAnalysisReport, analyze_chan
 from godot_agent.llm.client import LLMClient, Message, TokenUsage
 from godot_agent.prompts.assembler import PromptAssembler
 from godot_agent.prompts.skill_selector import narrow_tools_for_skills, resolve_skills
-from godot_agent.runtime.context_manager import smart_compact, estimate_message_tokens, truncate_tool_result
+from godot_agent.runtime.context_manager import smart_compact, estimate_message_tokens, truncate_tool_result, compress_step_messages
 from godot_agent.runtime.execution_plan import ExecutionPlan, PlanStep
 from godot_agent.runtime.design_memory import DesignMemory, GameplayIntentProfile, load_design_memory
 from godot_agent.runtime.events import EngineEvent
@@ -895,6 +895,17 @@ class ConversationEngine:
         self._emit_event("turn_started", text.splitlines()[0][:120], user_input=text, images=len(images_b64))
         return await self._run_loop(None, use_streaming=self.use_streaming)
 
+    def _check_auto_health(self) -> "ContextHealth":
+        from godot_agent.runtime.context_health import ContextHealth
+        total_tokens = sum(estimate_message_tokens(m) for m in self.messages)
+        usage_ratio = total_tokens / 1050000
+        return ContextHealth(
+            token_usage_ratio=usage_ratio,
+            consecutive_errors=getattr(self, '_auto_consecutive_errors', 0),
+            tool_success_rate=getattr(self, '_auto_tool_success_rate', 1.0),
+            rounds_since_compact=getattr(self, '_auto_rounds_since_compact', 0),
+        )
+
     async def _run_auto_step(self, step: PlanStep) -> bool:
         """Execute a single plan step. Returns True if successful."""
         step.status = "running"
@@ -919,6 +930,7 @@ class ConversationEngine:
                     step.summary = "quality gate failed after 3 retries"
                     return False
             step.mark_done(f"completed: {', '.join(step.files)}")
+            self.messages = compress_step_messages(self.messages, step.index, step.summary)
             return True
         except Exception as e:
             step.status = "failed"
