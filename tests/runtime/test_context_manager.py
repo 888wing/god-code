@@ -62,3 +62,55 @@ class TestContextBudget:
     def test_available(self):
         budget = ContextBudget(max_tokens=100000, system_prompt_tokens=10000, message_tokens=10000)
         assert budget.available > 0
+
+
+from godot_agent.runtime.context_manager import truncate_tool_result, prune_system_reports
+
+
+def test_truncate_short_result_unchanged():
+    text = "short result"
+    assert truncate_tool_result(text) == text
+
+
+def test_truncate_long_result():
+    text = "A" * 5000
+    result = truncate_tool_result(text, max_chars=2000)
+    assert len(result) < 2500
+    assert "[...truncated" in result
+    assert result.startswith("A" * 100)
+    assert result.endswith("A" * 100)
+
+
+def test_truncate_preserves_json_structure():
+    import json
+    data = {"output": "x" * 5000, "metadata": {"risk": "low"}}
+    text = json.dumps(data)
+    result = truncate_tool_result(text, max_chars=2000)
+    assert len(result) < 2500
+
+
+def test_prune_keeps_latest_two_reports():
+    from godot_agent.llm.types import Message
+    messages = [
+        Message.system("system"),
+        Message.user("[SYSTEM] Quality gate: report 1"),
+        Message.user("normal user message"),
+        Message.user("[SYSTEM] Quality gate: report 2"),
+        Message.user("[SYSTEM] Quality gate: report 3"),
+        Message.user("another user message"),
+    ]
+    pruned = prune_system_reports(messages, max_reports=2)
+    system_reports = [m for m in pruned if m.content and "[SYSTEM]" in m.content]
+    assert len(system_reports) == 2
+    assert "report 2" in system_reports[0].content
+    assert "report 3" in system_reports[1].content
+
+
+def test_prune_keeps_all_when_under_limit():
+    from godot_agent.llm.types import Message
+    messages = [
+        Message.system("system"),
+        Message.user("[SYSTEM] Quality gate: report 1"),
+    ]
+    pruned = prune_system_reports(messages, max_reports=2)
+    assert len(pruned) == 2

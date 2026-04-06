@@ -229,3 +229,25 @@ def select_relevant_files(
 
     scored.sort(key=lambda x: x[0], reverse=True)
     return [f for _, f in scored[:max_files]]
+
+
+def truncate_tool_result(content: str, max_chars: int = 2000) -> str:
+    """Truncate large tool results, keeping head and tail for context."""
+    if len(content) <= max_chars:
+        return content
+    head_size = int(max_chars * 0.6)
+    tail_size = int(max_chars * 0.25)
+    omitted = len(content) - head_size - tail_size
+    return f"{content[:head_size]}\n[...truncated {omitted} chars...]\n{content[-tail_size:]}"
+
+
+def prune_system_reports(messages: list[Message], max_reports: int = 2) -> list[Message]:
+    """Remove old [SYSTEM] quality/reviewer/playtest reports, keeping latest N."""
+    report_indices: list[int] = []
+    for i, m in enumerate(messages):
+        if m.role == "user" and isinstance(m.content, str) and m.content.startswith("[SYSTEM]"):
+            report_indices.append(i)
+    if len(report_indices) <= max_reports:
+        return messages
+    to_remove = set(report_indices[:-max_reports])
+    return [m for i, m in enumerate(messages) if i not in to_remove]
