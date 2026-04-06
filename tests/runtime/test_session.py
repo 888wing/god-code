@@ -71,3 +71,31 @@ class TestSessions:
         assert len(filtered_sessions) == 1
         assert filtered_sessions[0].session_id == "two"
         assert latest is not None
+
+
+def test_session_saves_changeset(tmp_path):
+    from godot_agent.runtime.session import save_session, load_session
+    from godot_agent.llm.types import Message
+    session_id = "test-changeset"
+    save_session(
+        str(tmp_path), session_id, [Message.system("sys")],
+        changeset_read=["a.gd", "b.gd"],
+        changeset_modified=["a.gd"],
+        completed_steps=["Step 1: created a.gd +45 lines"],
+    )
+    record = load_session(str(tmp_path), session_id)
+    assert record.changeset_read == ["a.gd", "b.gd"]
+    assert record.changeset_modified == ["a.gd"]
+    assert record.completed_steps == ["Step 1: created a.gd +45 lines"]
+
+
+def test_session_loads_without_changeset(tmp_path):
+    """Backward compat: old sessions without changeset fields."""
+    from godot_agent.runtime.session import save_session, load_session
+    from godot_agent.llm.types import Message
+    session_id = "test-compat"
+    save_session(str(tmp_path), session_id, [Message.system("sys")])
+    record = load_session(str(tmp_path), session_id)
+    assert record.changeset_read == []
+    assert record.changeset_modified == []
+    assert record.completed_steps == []

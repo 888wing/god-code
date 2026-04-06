@@ -26,6 +26,10 @@ class SessionRecord:
     gameplay_intent: dict[str, Any] = field(default_factory=dict)
     title: str = ""
     summary: str = ""
+    changeset_read: list[str] = field(default_factory=list)
+    changeset_modified: list[str] = field(default_factory=list)
+    completed_steps: list[str] = field(default_factory=list)
+    last_plan: dict[str, Any] | None = None
 
 
 def _session_title(messages: list[Message]) -> str:
@@ -56,6 +60,10 @@ def save_session(
     disabled_skills: list[str] | None = None,
     active_skills: list[str] | None = None,
     gameplay_intent: dict[str, Any] | None = None,
+    changeset_read: list[str] | None = None,
+    changeset_modified: list[str] | None = None,
+    completed_steps: list[str] | None = None,
+    last_plan: dict[str, Any] | None = None,
 ) -> Path:
     """Persist conversation messages to a JSON file on disk.
 
@@ -78,6 +86,10 @@ def save_session(
         "disabled_skills": list(disabled_skills or []),
         "active_skills": list(active_skills or []),
         "gameplay_intent": dict(gameplay_intent or {}),
+        "changeset_read": list(changeset_read or []),
+        "changeset_modified": list(changeset_modified or []),
+        "completed_steps": list(completed_steps or []),
+        "last_plan": last_plan,
         "message_count": len(messages),
         "title": _session_title(messages),
         "summary": _session_summary(messages),
@@ -107,6 +119,10 @@ def _record_from_data(data: dict, fallback_session_id: str = "") -> SessionRecor
         gameplay_intent=dict(data.get("gameplay_intent") or {}),
         title=data.get("title") or _session_title(messages),
         summary=data.get("summary") or _session_summary(messages),
+        changeset_read=list(data.get("changeset_read") or []),
+        changeset_modified=list(data.get("changeset_modified") or []),
+        completed_steps=list(data.get("completed_steps") or []),
+        last_plan=data.get("last_plan"),
     )
 
 
