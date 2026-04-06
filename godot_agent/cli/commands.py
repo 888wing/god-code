@@ -36,6 +36,7 @@ from godot_agent.runtime.intent_resolver import (
     resolve_gameplay_intent,
     should_prompt_for_intent,
 )
+from godot_agent.runtime.execution_plan import ExecutionPlan, PlanStep
 from godot_agent.runtime.modes import normalize_mode
 from godot_agent.runtime.providers import PROVIDER_PRESETS
 from godot_agent.runtime.session import list_sessions, load_latest_session, load_session
@@ -1339,6 +1340,99 @@ def chat(project: str = ".", config: str | None = None):
             return "quit"
         return None
 
+    import re as _re_mod
+
+    def _parse_plan_from_response(text: str) -> ExecutionPlan | None:
+        """Extract a structured plan from the model's response text."""
+        # Look for "### Plan:" header
+        plan_match = _re_mod.search(r"###\s*Plan:\s*(.+)", text)
+        if not plan_match:
+            return None
+        title = plan_match.group(1).strip()
+        # Extract risk
+        risk_match = _re_mod.search(r"\*\*Risk\*\*:\s*(low|medium|high)", text, _re_mod.IGNORECASE)
+        risk = risk_match.group(1).lower() if risk_match else "low"
+        # Extract numbered steps: "1. [action] [target] — [description]" or "1. action target — desc"
+        step_pattern = _re_mod.compile(
+            r"(\d+)\.\s+(\w+)\s+(.+?)(?:\s*[—\-]\s*(.+))?\n\s*Files?:\s*`?([^`\n]+)`?",
+            _re_mod.MULTILINE,
+        )
+        steps: list[PlanStep] = []
+        for m in step_pattern.finditer(text):
+            idx = int(m.group(1))
+            action = m.group(2).strip()
+            target = m.group(3).strip()
+            files_raw = m.group(5).strip()
+            files = [f.strip().strip("`") for f in files_raw.split(",")]
+            steps.append(PlanStep(index=idx, action=action, target=target, files=files))
+        if not steps:
+            return None
+        return ExecutionPlan(title=title, steps=steps, risk=risk)
+
+    async def _run_auto_flow(request: str) -> None:
+        nonlocal engine
+        # Phase 1: UNDERSTAND + PLAN
+        plan_prompt = (
+            f"The user wants: {request}\n\n"
+            "Scan the project, then output a structured plan using the Plan Output Format. "
+            "If you need to ask 1-2 clarifying questions first, ask them now."
+        )
+        if cfg.streaming and engine.on_stream_chunk:
+            response = await engine.submit(plan_prompt)
+        else:
+            with display.thinking():
+                response = await engine.submit(plan_prompt)
+        if not cfg.streaming:
+            display.agent_response(response)
+
+        plan = _parse_plan_from_response(response)
+        if not plan:
+            display.info("No structured plan detected. Respond to the agent's questions, or try /auto again with a clearer request.")
+            return
+
+        engine.current_plan = plan
+        display.plan_panel(plan)
+
+        # Phase 2: APPROVE
+        display.info("approve / skip N / add: ... / cancel")
+        while True:
+            choice = await _prompt_text_value("<cyan>plan></cyan> ")
+            if not choice or choice.lower() == "cancel":
+                engine.current_plan = None
+                display.info("Plan cancelled.")
+                return
+            if choice.lower() in ("approve", "go", "y", "yes"):
+                for s in plan.steps:
+                    if s.status == "pending":
+                        s.status = "approved"
+                break
+            if choice.lower().startswith("skip"):
+                indices = [int(x) for x in choice.split()[1:] if x.isdigit()]
+                for s in plan.steps:
+                    if s.index in indices:
+                        s.status = "skipped"
+                display.plan_panel(plan)
+                continue
+
+        # Phase 3: EXECUTE
+        display.info("Executing plan...")
+        for step in plan.steps:
+            if step.status != "approved":
+                continue
+            status_line = display.plan_status_line(plan)
+            display.console.print(f"  {status_line}")
+            success = await engine._run_auto_step(step)
+            if not success:
+                display.error(f"Step {step.index} failed: {step.summary}")
+                display.plan_panel(plan)
+                display.info("Fix the issue and run /auto again, or continue manually.")
+                return
+
+        # Phase 4: REPORT
+        display.plan_panel(plan)
+        display.success(f"Plan complete: {plan.done_count}/{plan.total_actionable} steps done.")
+        engine.current_plan = None
+
     multiline_buffer: list[str] = []
     in_multiline = False
 
@@ -1383,6 +1477,14 @@ def chat(project: str = ".", config: str | None = None):
 
                 if cmd in ("/version", "version"):
                     _pkg_attr("_check_update", _check_update)(verbose=True)
+                    continue
+
+                if cmd == "/auto" or cmd.startswith("/auto "):
+                    auto_request = stripped[5:].strip() if len(stripped) > 5 else ""
+                    if not auto_request:
+                        display.error("Usage: /auto <what you want to build>")
+                        continue
+                    await _run_auto_flow(auto_request)
                     continue
 
                 if cmd in ("/save", "save"):
@@ -1566,6 +1668,8 @@ def chat(project: str = ".", config: str | None = None):
                         "Verbosity": cfg.verbosity,
                         **_intent_status_data(),
                     })
+                    if engine.current_plan:
+                        display.plan_panel(engine.current_plan)
                     continue
 
                 if cmd == "/settings":

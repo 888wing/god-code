@@ -421,3 +421,21 @@ class TestTryLiveBridge:
             assert mock_instance.connect.await_count == 2
 
         clear_runtime_snapshot()
+
+
+def test_engine_has_current_plan():
+    assert hasattr(ConversationEngine, '_run_auto_step')
+
+
+def test_engine_current_plan_init():
+    """Verify current_plan is initialized as None."""
+    from pathlib import Path
+    from godot_agent.prompts.assembler import PromptAssembler, PromptContext
+    mock_client = AsyncMock(spec=LLMClient)
+    registry = ToolRegistry()
+    engine = ConversationEngine(
+        client=mock_client,
+        registry=registry,
+        system_prompt="test",
+    )
+    assert engine.current_plan is None

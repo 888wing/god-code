@@ -13,7 +13,8 @@ from godot_agent.godot.impact_analysis import ImpactAnalysisReport, analyze_chan
 from godot_agent.llm.client import LLMClient, Message, TokenUsage
 from godot_agent.prompts.assembler import PromptAssembler
 from godot_agent.prompts.skill_selector import narrow_tools_for_skills, resolve_skills
-from godot_agent.runtime.context_manager import smart_compact, estimate_message_tokens
+from godot_agent.runtime.context_manager import smart_compact, estimate_message_tokens, truncate_tool_result
+from godot_agent.runtime.execution_plan import ExecutionPlan, PlanStep
 from godot_agent.runtime.design_memory import DesignMemory, GameplayIntentProfile, load_design_memory
 from godot_agent.runtime.events import EngineEvent
 from godot_agent.runtime.intent_resolver import resolve_gameplay_intent
@@ -143,6 +144,7 @@ class ConversationEngine:
         self.last_response: str = ""
         self.last_user_input: str = ""
         self.last_plan: str = ""
+        self.current_plan: ExecutionPlan | None = None
         self.project_scan: ProjectScanSummary | None = None
         self.project_scan_text: str = ""
         self.changeset = ChangeSet()
@@ -636,7 +638,8 @@ class ConversationEngine:
             if result.error:
                 content = json.dumps({"error": result.error})
             else:
-                content = json.dumps(result.output.model_dump() if result.output else {})
+                raw = json.dumps(result.output.model_dump() if result.output else {})
+                content = truncate_tool_result(raw)
             self.messages.append(Message.tool_result(tool_call_id=tc.id, content=content))
 
         return tool_names_used, modified_files
@@ -891,6 +894,39 @@ class ConversationEngine:
         self.messages.append(Message.user_with_images(text, images_b64))
         self._emit_event("turn_started", text.splitlines()[0][:120], user_input=text, images=len(images_b64))
         return await self._run_loop(None, use_streaming=self.use_streaming)
+
+    async def _run_auto_step(self, step: PlanStep) -> bool:
+        """Execute a single plan step. Returns True if successful."""
+        step.status = "running"
+        instruction = (
+            f"[AUTO] Execute step {step.index}: {step.action} {step.target}\n"
+            f"Files: {', '.join(step.files)}"
+        )
+        self.messages.append(Message.user(instruction))
+        old_mode = self.mode
+        self.mode = "auto_execute"
+        self._sync_registry_context()
+        try:
+            result = await self._run_loop(None, use_streaming=self.use_streaming)
+            if self.last_quality_report and self.last_quality_report.requires_fix:
+                for _retry in range(3):
+                    self.messages.append(Message.user("[AUTO] Quality gate failed. Fix the issues."))
+                    result = await self._run_loop(None, use_streaming=self.use_streaming)
+                    if not self.last_quality_report or not self.last_quality_report.requires_fix:
+                        break
+                else:
+                    step.status = "failed"
+                    step.summary = "quality gate failed after 3 retries"
+                    return False
+            step.mark_done(f"completed: {', '.join(step.files)}")
+            return True
+        except Exception as e:
+            step.status = "failed"
+            step.summary = str(e)[:200]
+            return False
+        finally:
+            self.mode = old_mode
+            self._sync_registry_context()
 
     async def close(self) -> None:
         await self.client.close()
