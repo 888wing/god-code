@@ -120,3 +120,22 @@ async def test_protected_path_hook_asks_for_project_settings(project_root: Path)
 
     assert result is not None
     assert result.permission_behavior == "ask"
+
+
+@pytest.mark.asyncio
+async def test_read_before_write_allows_in_auto_execute_mode(project_root: Path) -> None:
+    tool = EditScriptTool()
+    path = project_root / "player.gd"
+    changeset = ChangeSet()
+    # NOT read yet — changeset.read_files is empty
+    context = ToolExecutionContext(mode="auto_execute", changeset=changeset)
+    hook = RequireReadBeforeWriteHook()
+
+    result = await hook.pre_execute(
+        tool,
+        tool.Input(path=str(path), old_string="var hp: int = 10", new_string="var hp: int = 20"),
+        context,
+    )
+
+    # In auto_execute mode, should NOT block even though file was not read
+    assert result is None

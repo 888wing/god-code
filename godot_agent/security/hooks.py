@@ -51,6 +51,9 @@ class RequireReadBeforeWriteHook(ToolHook):
     }
 
     async def pre_execute(self, tool: BaseTool, parsed_input: BaseModel, context) -> HookResult | None:
+        # Auto-execute bypasses read-before-write
+        if getattr(context, 'mode', '') == "auto_execute":
+            return None
         if tool.name not in self._MUTATING_WITH_PATH:
             return None
         path = getattr(parsed_input, "path", "")

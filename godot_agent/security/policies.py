@@ -83,7 +83,7 @@ class PermissionPolicyFramework:
         if protected_reason and context.mode not in {"apply", "fix"}:
             return PermissionDecision(False, f"{path} is protected and cannot be modified in {context.mode} mode.")
 
-        if risk == OperationRisk.HIGH and context.mode not in {"apply", "fix"}:
+        if risk == OperationRisk.HIGH and context.mode not in {"apply", "fix", "auto_execute"}:
             return PermissionDecision(False, f"{tool.name} is too risky for {context.mode} mode.")
 
         _emit(context, "policy_allowed", f"Allowed tool {tool.name}", tool_name=tool.name, risk=risk.value)
