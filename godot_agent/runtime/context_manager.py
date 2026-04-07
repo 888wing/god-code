@@ -241,11 +241,26 @@ def truncate_tool_result(content: str, max_chars: int = 2000) -> str:
     return f"{content[:head_size]}\n[...truncated {omitted} chars...]\n{content[-tail_size:]}"
 
 
-def prune_system_reports(messages: list[Message], max_reports: int = 2) -> list[Message]:
-    """Remove old [SYSTEM] quality/reviewer/playtest reports, keeping latest N."""
+def prune_system_reports(
+    messages: list[Message],
+    max_reports: int = 2,
+    prefix_filter: str | None = None,
+) -> list[Message]:
+    """Remove old [SYSTEM] reports from history, keeping the latest N.
+
+    If ``prefix_filter`` is set, only messages whose content starts with the
+    given prefix are considered for pruning. Other [SYSTEM]-prefixed messages
+    pass through untouched. This lets callers scope the prune to a specific
+    report type (e.g. ``"[SYSTEM] Planner"``) without collateral damage to
+    quality-gate or reviewer reports.
+
+    Backward compat: when ``prefix_filter`` is None, every [SYSTEM]-prefixed
+    message is eligible for pruning (original v1.0.0 behavior).
+    """
+    match_prefix = prefix_filter if prefix_filter is not None else "[SYSTEM]"
     report_indices: list[int] = []
     for i, m in enumerate(messages):
-        if m.role == "user" and isinstance(m.content, str) and m.content.startswith("[SYSTEM]"):
+        if m.role == "user" and isinstance(m.content, str) and m.content.startswith(match_prefix):
             report_indices.append(i)
     if len(report_indices) <= max_reports:
         return messages

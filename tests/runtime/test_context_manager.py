@@ -116,6 +116,78 @@ def test_prune_keeps_all_when_under_limit():
     assert len(pruned) == 2
 
 
+def test_prune_system_reports_with_prefix_filter_only_prunes_matching():
+    """Regression v1.0.1/T1+T4: prefix_filter scopes pruning so only the
+    specified report type is affected. Other [SYSTEM] reports pass through
+    untouched so quality gate / reviewer reports are not collateral damage
+    when we prune planner blocks.
+    """
+    from godot_agent.llm.types import Message
+    messages = [
+        Message.system("system"),
+        Message.user("[SYSTEM] Planner pass before implementation:\nplan A"),
+        Message.user("[SYSTEM] Quality gate: passed"),
+        Message.user("[SYSTEM] Planner pass before implementation:\nplan B"),
+        Message.user("[SYSTEM] Reviewer: PASS"),
+        Message.user("[SYSTEM] Planner pass before implementation:\nplan C"),
+    ]
+    pruned = prune_system_reports(
+        messages,
+        max_reports=1,
+        prefix_filter="[SYSTEM] Planner",
+    )
+    planner_reports = [
+        m for m in pruned if isinstance(m.content, str) and m.content.startswith("[SYSTEM] Planner")
+    ]
+    other_reports = [
+        m for m in pruned
+        if isinstance(m.content, str)
+        and m.content.startswith("[SYSTEM]")
+        and not m.content.startswith("[SYSTEM] Planner")
+    ]
+    # Only the latest planner block remains
+    assert len(planner_reports) == 1
+    assert "plan C" in planner_reports[0].content
+    # All non-planner [SYSTEM] reports are untouched
+    assert len(other_reports) == 2
+
+
+def test_prune_system_reports_prefix_filter_none_matches_all():
+    """Backward compat: omitting prefix_filter preserves the original
+    behavior of pruning any [SYSTEM]-prefixed message."""
+    from godot_agent.llm.types import Message
+    messages = [
+        Message.system("system"),
+        Message.user("[SYSTEM] Planner: old plan"),
+        Message.user("[SYSTEM] Quality gate: old report"),
+        Message.user("[SYSTEM] Planner: new plan"),
+        Message.user("[SYSTEM] Quality gate: new report"),
+    ]
+    pruned = prune_system_reports(messages, max_reports=2)  # no prefix_filter
+    system_msgs = [m for m in pruned if isinstance(m.content, str) and m.content.startswith("[SYSTEM]")]
+    assert len(system_msgs) == 2
+    # Original behavior: keep the latest 2 regardless of sub-type
+    assert "new plan" in system_msgs[0].content
+    assert "new report" in system_msgs[1].content
+
+
+def test_prune_system_reports_prefix_filter_under_limit_no_op():
+    """When matching reports are already within the limit, pruning does
+    nothing and returns the original list."""
+    from godot_agent.llm.types import Message
+    messages = [
+        Message.system("system"),
+        Message.user("[SYSTEM] Planner: only plan"),
+        Message.user("[SYSTEM] Quality gate: report"),
+    ]
+    pruned = prune_system_reports(
+        messages,
+        max_reports=2,
+        prefix_filter="[SYSTEM] Planner",
+    )
+    assert len(pruned) == len(messages)
+
+
 from godot_agent.runtime.context_manager import compress_step_messages
 
 def test_compress_step_messages():

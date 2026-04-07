@@ -13,7 +13,7 @@ from godot_agent.godot.impact_analysis import ImpactAnalysisReport, analyze_chan
 from godot_agent.llm.client import LLMClient, Message, TokenUsage
 from godot_agent.prompts.assembler import PromptAssembler
 from godot_agent.prompts.skill_selector import narrow_tools_for_skills, resolve_skills
-from godot_agent.runtime.context_manager import smart_compact, estimate_message_tokens, truncate_tool_result, compress_step_messages
+from godot_agent.runtime.context_manager import smart_compact, estimate_message_tokens, truncate_tool_result, compress_step_messages, prune_system_reports
 from godot_agent.runtime.execution_plan import ExecutionPlan, PlanStep
 from godot_agent.runtime.design_memory import DesignMemory, GameplayIntentProfile, load_design_memory
 from godot_agent.runtime.events import EngineEvent
@@ -155,6 +155,12 @@ class ConversationEngine:
         self.use_streaming = False
         self.base_allowed_tools: set[str] | None = None
         self.allowed_tools: set[str] | None = None
+        # v1.0.1/T1: how many planner blocks to keep in history. Default 2
+        # keeps the current plan plus one previous for "what did I just do"
+        # context without carrying N>2 worth of stale plans. Override via
+        # config (runtime/config.py `plan_history_keep`) or by setting on
+        # the engine instance directly.
+        self.plan_history_keep: int = 2
         self.active_skills: list[str] = []
         self.skill_mode: str = "auto"
         self.enabled_skills: list[str] = []
@@ -892,6 +898,31 @@ class ConversationEngine:
                 "Follow this plan unless direct inspection or validation proves it wrong."
             )
         )
+        # v1.0.1/T1+T4: prune old planner blocks from history so long sessions
+        # don't accumulate N × 500-token plans that rebill on every subsequent
+        # LLM call. Scoped by prefix so quality-gate / reviewer reports (also
+        # [SYSTEM]-prefixed) are never touched as collateral damage.
+        before_count = sum(
+            1 for m in self.messages
+            if isinstance(m.content, str) and m.content.startswith("[SYSTEM] Planner pass")
+        )
+        self.messages = prune_system_reports(
+            self.messages,
+            max_reports=self.plan_history_keep,
+            prefix_filter="[SYSTEM] Planner pass",
+        )
+        after_count = sum(
+            1 for m in self.messages
+            if isinstance(m.content, str) and m.content.startswith("[SYSTEM] Planner pass")
+        )
+        dropped = before_count - after_count
+        if dropped > 0:
+            self._emit_event(
+                "plan_pruned",
+                f"Pruned {dropped} stale planner block(s) from history",
+                dropped=dropped,
+                kept=after_count,
+            )
         self._emit_event("planner_finished", "Planner pass complete", used_tools=planner_result.used_tools)
 
     async def submit(self, user_input: str) -> str:

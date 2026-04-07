@@ -493,3 +493,122 @@ def test_engine_current_plan_init():
 
 def test_engine_has_check_health():
     assert hasattr(ConversationEngine, '_check_auto_health')
+
+
+class TestPlannerHistoryPruning:
+    """Regression v1.0.1/T1: planner blocks must be pruned from history so
+    they don't accumulate across every apply/fix turn and inflate every
+    subsequent LLM call's input token count via rebill.
+    """
+
+    def _make_engine_with_mock_dispatcher(self, plan_contents: list[str]) -> tuple:
+        """Build an engine with a mocked dispatcher that returns the given
+        plan strings one after another."""
+        from godot_agent.agents.results import AgentTaskResult
+
+        mock_client = AsyncMock(spec=LLMClient)
+        mock_client.chat = AsyncMock(return_value=_resp(Message.assistant(content="done")))
+        registry = ToolRegistry()
+
+        class MockDispatcher:
+            def __init__(self, plans):
+                self.plans = list(plans)
+                self.calls = 0
+
+            async def run_planner(self, task):
+                plan = self.plans[self.calls] if self.calls < len(self.plans) else "fallback plan"
+                self.calls += 1
+                return AgentTaskResult(role="planner", content=plan)
+
+        dispatcher = MockDispatcher(plan_contents)
+        engine = ConversationEngine(
+            client=mock_client,
+            registry=registry,
+            system_prompt="t",
+            mode="apply",
+            dispatcher=dispatcher,
+        )
+        return engine, dispatcher
+
+    @pytest.mark.asyncio
+    async def test_planner_block_pruned_after_third_run(self):
+        """After 3 planner runs, only the latest 2 plan blocks should
+        remain in engine.messages (plan_history_keep=2)."""
+        plans = [
+            "## Plan\n**Goal**: first\n**Steps**: 1. do A",
+            "## Plan\n**Goal**: second\n**Steps**: 1. do B",
+            "## Plan\n**Goal**: third\n**Steps**: 1. do C",
+        ]
+        engine, dispatcher = self._make_engine_with_mock_dispatcher(plans)
+
+        await engine._maybe_run_planner("task 1")
+        await engine._maybe_run_planner("task 2")
+        await engine._maybe_run_planner("task 3")
+
+        planner_blocks = [
+            m for m in engine.messages
+            if isinstance(m.content, str) and "[SYSTEM] Planner pass" in m.content
+        ]
+        assert len(planner_blocks) == 2, (
+            f"expected 2 blocks after pruning, got {len(planner_blocks)}: "
+            f"{[m.content[:80] for m in planner_blocks]}"
+        )
+        # The oldest plan ("first") should be gone; second and third remain
+        contents = " ".join(m.content for m in planner_blocks if isinstance(m.content, str))
+        assert "first" not in contents
+        assert "second" in contents
+        assert "third" in contents
+
+    @pytest.mark.asyncio
+    async def test_planner_prune_does_not_touch_quality_gate_reports(self):
+        """Regression T1 safety: pruning planner blocks must not remove
+        adjacent [SYSTEM] Quality gate or Reviewer reports."""
+        plans = [
+            "## Plan\n**Goal**: first\n**Steps**: 1. do A",
+            "## Plan\n**Goal**: second\n**Steps**: 1. do B",
+            "## Plan\n**Goal**: third\n**Steps**: 1. do C",
+        ]
+        engine, _ = self._make_engine_with_mock_dispatcher(plans)
+
+        await engine._maybe_run_planner("task 1")
+        # Inject a quality gate report between planner runs (simulates the
+        # normal engine flow where the quality gate report follows an
+        # apply-mode turn)
+        engine.messages.append(
+            Message.user("[SYSTEM] Quality gate: passed after task 1")
+        )
+        await engine._maybe_run_planner("task 2")
+        engine.messages.append(
+            Message.user("[SYSTEM] Reviewer: PASS for task 2")
+        )
+        await engine._maybe_run_planner("task 3")
+
+        quality_gate_msgs = [
+            m for m in engine.messages
+            if isinstance(m.content, str) and "Quality gate" in m.content
+        ]
+        reviewer_msgs = [
+            m for m in engine.messages
+            if isinstance(m.content, str) and "Reviewer" in m.content
+        ]
+        # Both non-planner [SYSTEM] reports must still be present
+        assert len(quality_gate_msgs) == 1
+        assert len(reviewer_msgs) == 1
+
+    @pytest.mark.asyncio
+    async def test_planner_prune_emits_plan_pruned_event(self):
+        """Regression T1: plan_pruned event fires with the drop count so
+        dogfood can verify savings."""
+        plans = ["plan A", "plan B", "plan C"]
+        engine, _ = self._make_engine_with_mock_dispatcher(plans)
+        events_seen: list[str] = []
+        engine.on_event = lambda event: events_seen.append(event.kind)
+
+        await engine._maybe_run_planner("t1")
+        await engine._maybe_run_planner("t2")
+        # After the third call a prune must happen (3 blocks → keep 2)
+        await engine._maybe_run_planner("t3")
+
+        assert "plan_pruned" in events_seen, (
+            f"expected plan_pruned event, saw: {events_seen}"
+        )
