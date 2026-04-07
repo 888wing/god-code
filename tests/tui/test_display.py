@@ -75,6 +75,24 @@ def test_tool_start_opens_status_spinner_and_result_closes_it():
     assert display._tool_status is None, "tool_result did not close the status spinner"
 
 
+def test_handle_diff_failed_event_logs_to_activity():
+    """Regression v1.0.0/C1: diff_failed event must be visible in
+    activity log so users know the modification happened but the
+    diff couldn't be rendered (instead of silent except: pass).
+    """
+    display = ChatDisplay(console=Console(record=True))
+    display.handle_event(
+        EngineEvent(
+            kind="diff_failed",
+            message="diff: failed for /tmp/x.gd",
+            data={"path": "/tmp/x.gd", "reason": "Permission denied"},
+        )
+    )
+    assert any("diff" in line and "failed" in line for line in display.activity_log), (
+        f"diff_failed event did not produce an activity line; log: {display.activity_log}"
+    )
+
+
 def test_handle_intent_event_updates_display_state():
     display = ChatDisplay(console=Console(record=True))
 

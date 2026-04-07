@@ -632,8 +632,16 @@ class ConversationEngine:
                     new_text = Path(args.get("path", "")).read_text(errors="replace")
                     filename = self._relative_path(args.get("path", ""))
                     self.on_diff(old_text, new_text, filename)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Don't swallow silently — emit an event so the user knows
+                    # the modification happened but the diff couldn't be shown
+                    # (regression v1.0.0/C1).
+                    self._emit_event(
+                        "diff_failed",
+                        f"diff: failed for {args.get('path', '?')}",
+                        path=args.get("path", ""),
+                        reason=str(exc),
+                    )
 
             self._record_tool_effect(tc.name, args, result.error is None, modified_files)
 

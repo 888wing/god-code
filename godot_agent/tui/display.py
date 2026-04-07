@@ -769,6 +769,10 @@ class ChatDisplay:
             used = event.data.get("used_tools") or []
             suffix = f" ({', '.join(used[:3])})" if used else ""
             self.add_activity(f"planner: plan ready{suffix}")
+        elif event.kind == "diff_failed":
+            path = event.data.get("path", "?")
+            reason = event.data.get("reason", "unknown")
+            self.add_activity(f"diff: failed for {path} ({reason[:60]})")
         elif event.kind == "context_compacted":
             self.add_activity(event.message)
         elif event.kind == "intent_inferred":
