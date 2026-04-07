@@ -343,3 +343,20 @@ def _wire_engine_callbacks(
         engine.on_stream_chunk = None
         engine.on_stream_end = None
     engine.on_commit_suggest = lambda: display.info("Changes made. Run 'git add -A && git commit' to save.")
+
+    # Propagate TUI wiring into the dispatcher so planner/worker sub-engines
+    # stream and emit events just like the main engine. Without this, the
+    # planner pass blocks silently for the full duration of a reasoning turn
+    # and the user sees only a spinner (observed as 60-120s of "stuck loading"
+    # on gpt-5.4 with reasoning_effort=high before v0.9.2).
+    #
+    # getattr defensively: test doubles like FakeEngine in the CLI fuzz / flow
+    # suites don't carry a dispatcher attribute, and real engines may have one
+    # set to None when no dispatcher was constructed.
+    dispatcher = getattr(engine, "dispatcher", None)
+    if dispatcher is not None:
+        dispatcher.use_streaming = engine.use_streaming
+        dispatcher.on_stream_start = engine.on_stream_start
+        dispatcher.on_stream_chunk = engine.on_stream_chunk
+        dispatcher.on_stream_end = engine.on_stream_end
+        dispatcher.on_event = engine.on_event

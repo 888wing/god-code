@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from godot_agent.agents.configs import AGENT_CONFIGS
 from godot_agent.agents.dispatcher import AgentDispatcher
 from godot_agent.llm.client import ChatResponse, LLMClient, Message, TokenUsage
 from godot_agent.prompts.assembler import PromptContext
@@ -63,6 +64,74 @@ class TestAgentDispatcher:
         assert result.verdict == "PASS"
         assert "Implemented" in result.content
         assert dispatcher.resolve_allowed_tools("worker") == {"read_file", "write_file"}
+
+    def test_sub_engine_defaults_without_stream_wiring(self, project_root: Path) -> None:
+        """A dispatcher with no stream wiring produces sub-engines with streaming off.
+
+        Documents the baseline so the next test clearly shows the new wiring propagates.
+        """
+        client = AsyncMock(spec=LLMClient)
+        dispatcher = AgentDispatcher(
+            client=client,
+            registry=_registry(),
+            prompt_context=PromptContext(project_root=project_root, mode="apply"),
+            project_path=str(project_root),
+            base_allowed_tools={"read_file", "write_file"},
+        )
+        sub_engine = dispatcher._build_engine(AGENT_CONFIGS["planner"], user_hint="anything")
+        assert sub_engine.use_streaming is False
+        assert sub_engine.on_stream_start is None
+        assert sub_engine.on_stream_chunk is None
+        assert sub_engine.on_stream_end is None
+        assert sub_engine.on_event is None
+
+    def test_sub_engine_inherits_stream_wiring_from_dispatcher(self, project_root: Path) -> None:
+        """Regression: when the dispatcher has stream callbacks set (by the CLI),
+        sub-engines created for planner/worker/reviewer passes MUST inherit them,
+        so the planner pass streams text to the TUI instead of blocking silently.
+
+        Before v0.9.2, dispatcher._build_engine created fresh engines without ever
+        wiring on_stream_*, leaving the user with a stuck spinner during planner
+        passes (especially painful with reasoning_effort=high on gpt-5.4, where
+        the planner call could take 60-120s with zero visible feedback).
+        """
+        stream_starts: list[int] = []
+        stream_chunks: list[str] = []
+        stream_ends: list[bool] = []
+        events_seen: list[str] = []
+
+        def on_start() -> None:
+            stream_starts.append(1)
+
+        def on_chunk(text: str) -> None:
+            stream_chunks.append(text)
+
+        def on_end(finalize: bool) -> None:
+            stream_ends.append(finalize)
+
+        def on_event(event) -> None:
+            events_seen.append(event.kind)
+
+        client = AsyncMock(spec=LLMClient)
+        dispatcher = AgentDispatcher(
+            client=client,
+            registry=_registry(),
+            prompt_context=PromptContext(project_root=project_root, mode="apply"),
+            project_path=str(project_root),
+            base_allowed_tools={"read_file", "write_file"},
+        )
+        dispatcher.use_streaming = True
+        dispatcher.on_stream_start = on_start
+        dispatcher.on_stream_chunk = on_chunk
+        dispatcher.on_stream_end = on_end
+        dispatcher.on_event = on_event
+
+        sub_engine = dispatcher._build_engine(AGENT_CONFIGS["planner"], user_hint="anything")
+        assert sub_engine.use_streaming is True
+        assert sub_engine.on_stream_start is on_start
+        assert sub_engine.on_stream_chunk is on_chunk
+        assert sub_engine.on_stream_end is on_end
+        assert sub_engine.on_event is on_event
 
     @pytest.mark.asyncio
     async def test_reviewer_wraps_deterministic_review(self, project_root: Path, monkeypatch) -> None:

@@ -732,6 +732,12 @@ class ChatDisplay:
             self.last_response_preview = event.message
         elif event.kind == "assistant_stream_finished" and not event.data.get("final", False):
             self.add_activity("assistant: requested tools")
+        elif event.kind == "planner_started":
+            self.add_activity("planner: composing plan")
+        elif event.kind == "planner_finished":
+            used = event.data.get("used_tools") or []
+            suffix = f" ({', '.join(used[:3])})" if used else ""
+            self.add_activity(f"planner: plan ready{suffix}")
         elif event.kind == "context_compacted":
             self.add_activity(event.message)
         elif event.kind == "intent_inferred":

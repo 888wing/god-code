@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from typing import Callable
 
 from godot_agent.godot.impact_analysis import format_impact_report, infer_request_impact
 from godot_agent.agents.configs import AGENT_CONFIGS, AgentConfig
@@ -11,6 +12,7 @@ from godot_agent.agents.results import AgentTaskResult
 from godot_agent.llm.client import LLMClient
 from godot_agent.prompts.assembler import PromptAssembler, PromptContext
 from godot_agent.runtime.design_memory import GameplayIntentProfile, load_design_memory
+from godot_agent.runtime.events import EngineEvent
 from godot_agent.runtime.intent_resolver import resolve_gameplay_intent
 from godot_agent.runtime.engine import ConversationEngine
 from godot_agent.runtime.playtest_harness import format_playtest_report, run_playtest_harness
@@ -21,7 +23,14 @@ from godot_agent.tools.registry import ToolRegistry
 
 
 class AgentDispatcher:
-    """Creates role-scoped engines and deterministic review passes."""
+    """Creates role-scoped engines and deterministic review passes.
+
+    Stream wiring attributes (``use_streaming`` and the ``on_stream_*`` /
+    ``on_event`` callbacks) are propagated onto every sub-engine created by
+    :meth:`_build_engine`, so planner/worker passes produce live TUI feedback
+    instead of a blocking spinner. The CLI sets these via
+    ``_wire_engine_callbacks`` whenever it wires the main engine.
+    """
 
     def __init__(
         self,
@@ -39,6 +48,14 @@ class AgentDispatcher:
         self.project_path = project_path
         self.godot_path = godot_path
         self.base_allowed_tools = set(base_allowed_tools) if base_allowed_tools is not None else None
+
+        # Stream wiring (set by CLI after construction via _wire_engine_callbacks).
+        # Defaults keep every existing test / non-TUI caller working unchanged.
+        self.use_streaming: bool = False
+        self.on_stream_start: Callable[[], None] | None = None
+        self.on_stream_chunk: Callable[[str], None] | None = None
+        self.on_stream_end: Callable[[bool], None] | None = None
+        self.on_event: Callable[[EngineEvent], None] | None = None
 
     def _clone_registry(self) -> ToolRegistry:
         cloned = ToolRegistry()
@@ -100,6 +117,14 @@ class AgentDispatcher:
         )
         engine.base_allowed_tools = set(allowed_tools)
         engine.allowed_tools = set(allowed_tools)
+        # Propagate TUI wiring from the dispatcher so planner/worker passes
+        # stream tokens and emit events to the display instead of blocking
+        # silently behind a spinner for the duration of a reasoning turn.
+        engine.use_streaming = self.use_streaming
+        engine.on_stream_start = self.on_stream_start
+        engine.on_stream_chunk = self.on_stream_chunk
+        engine.on_stream_end = self.on_stream_end
+        engine.on_event = self.on_event
         return engine
 
     async def run_planner(self, task: str) -> AgentTaskResult:
