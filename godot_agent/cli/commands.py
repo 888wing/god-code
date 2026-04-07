@@ -1818,7 +1818,27 @@ def chat(project: str = ".", config: str | None = None):
                     )
 
                 if cfg.autosave_session:
-                    _save_chat_session(cfg, session_id, engine, project_root, proj_name)
+                    # v1.0.0/A5: surface autosave outcome via the engine's
+                    # event bus so the user has a visible trail in the
+                    # activity log instead of silent saves. Test doubles like
+                    # FakeEngine don't have _emit_event, so use getattr
+                    # defensively (matches the dispatcher pattern from v0.9.2).
+                    _emit = getattr(engine, "_emit_event", None)
+                    try:
+                        path = _save_chat_session(cfg, session_id, engine, project_root, proj_name)
+                        if _emit is not None:
+                            _emit(
+                                "session_autosaved",
+                                f"saved: {Path(path).name if path else session_id}",
+                                path=str(path) if path else "",
+                            )
+                    except Exception as exc:
+                        if _emit is not None:
+                            _emit(
+                                "session_autosave_failed",
+                                f"autosave failed: {exc}",
+                                error=str(exc),
+                            )
 
                 # Budget warning
                 if cfg.token_budget > 0:
@@ -1826,7 +1846,11 @@ def chat(project: str = ".", config: str | None = None):
 
         finally:
             if cfg.autosave_session:
-                _save_chat_session(cfg, session_id, engine, project_root, proj_name)
+                # Best-effort final save during shutdown; don't crash close().
+                try:
+                    _save_chat_session(cfg, session_id, engine, project_root, proj_name)
+                except Exception:
+                    pass
             await engine.close()
 
     asyncio.run(_loop())

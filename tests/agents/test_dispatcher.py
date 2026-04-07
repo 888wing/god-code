@@ -5,6 +5,34 @@ import pytest
 
 from godot_agent.agents.configs import AGENT_CONFIGS
 from godot_agent.agents.dispatcher import AgentDispatcher
+
+
+class TestPlannerPrompt:
+    """Regression v1.0.0/F1+F2: planner prompt rewrite to stop the
+    'I am in PLAN mode' hallucination and enforce a structured format.
+    """
+
+    def test_planner_prompt_does_not_say_plan_mode(self):
+        prompt = AGENT_CONFIGS["planner"].prompt.lower()
+        # The exact phrasing the LLM was producing
+        assert "plan mode" not in prompt or "not.*plan mode" in prompt or "plan mode is" in prompt, (
+            "planner prompt must not casually say 'plan mode'; "
+            "it must explicitly disavow that interpretation"
+        )
+
+    def test_planner_prompt_identifies_role_correctly(self):
+        prompt = AGENT_CONFIGS["planner"].prompt.lower()
+        assert "planner" in prompt, "planner prompt must identify itself as planner"
+        assert "sub-agent" in prompt or "subagent" in prompt, (
+            "planner prompt should clarify it's a sub-agent inside god-code"
+        )
+
+    def test_planner_prompt_enforces_structured_format(self):
+        prompt = AGENT_CONFIGS["planner"].prompt
+        for required_section in ["Goal", "Scope", "Steps", "Risks", "Validation"]:
+            assert required_section in prompt, (
+                f"planner prompt must require {required_section!r} section"
+            )
 from godot_agent.llm.client import ChatResponse, LLMClient, Message, TokenUsage
 from godot_agent.prompts.assembler import PromptContext
 from godot_agent.tools.file_ops import ReadFileTool

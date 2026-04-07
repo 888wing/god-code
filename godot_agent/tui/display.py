@@ -12,6 +12,7 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
@@ -801,15 +802,28 @@ class ChatDisplay:
         elif event.kind == "assistant_stream_finished" and not event.data.get("final", False):
             self.add_activity("assistant: requested tools")
         elif event.kind == "planner_started":
+            # v1.0.0/A4: visually bracket planner output with Rule separators
+            # so users can distinguish the planner sub-agent's response from
+            # the main turn's response (both stream into cyan panels otherwise).
+            self.console.print()
+            self.console.print(Rule("[dim cyan]planner[/]", style="dim cyan"))
             self.add_activity("planner: composing plan")
         elif event.kind == "planner_finished":
             used = event.data.get("used_tools") or []
             suffix = f" ({', '.join(used[:3])})" if used else ""
+            self.console.print(Rule(style="dim cyan"))
+            self.console.print()
             self.add_activity(f"planner: plan ready{suffix}")
         elif event.kind == "diff_failed":
             path = event.data.get("path", "?")
             reason = event.data.get("reason", "unknown")
             self.add_activity(f"diff: failed for {path} ({reason[:60]})")
+        elif event.kind == "session_autosaved":
+            # v1.0.0/A5: previous behaviour was completely silent.
+            self.add_activity(event.message or "session: autosaved")
+        elif event.kind == "session_autosave_failed":
+            self.add_activity(event.message or "session: autosave failed")
+            self.console.print(f"  [red]autosave failed:[/] {event.data.get('error', '?')}")
         elif event.kind == "tool_result_truncated":
             tool_name = event.data.get("tool_name", "?")
             original = int(event.data.get("original_length", 0))
