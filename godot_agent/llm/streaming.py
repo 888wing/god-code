@@ -54,6 +54,10 @@ async def _stream_via_backend(
         "messages": [m.to_dict() for m in messages],
         "metadata": route_metadata,
         "stream": True,
+        # Without stream_options.include_usage, the backend's final SSE
+        # chunk omits the usage block and TUI usage line shows 0 tokens
+        # for backend-mode users (regression v1.0.0/B5).
+        "stream_options": {"include_usage": True},
     }
     if tools:
         body["tools"] = tools
