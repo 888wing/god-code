@@ -824,6 +824,9 @@ class ChatDisplay:
         elif event.kind == "session_autosave_failed":
             self.add_activity(event.message or "session: autosave failed")
             self.console.print(f"  [red]autosave failed:[/] {event.data.get('error', '?')}")
+        elif event.kind == "turn_cancelled":
+            # v1.0.0/C2: visible trail when Ctrl+C actually cancels a turn.
+            self.add_activity(event.message or "turn cancelled")
         elif event.kind == "tool_result_truncated":
             tool_name = event.data.get("tool_name", "?")
             original = int(event.data.get("original_length", 0))

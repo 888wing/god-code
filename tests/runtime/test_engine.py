@@ -61,6 +61,36 @@ class TestConversationEngine:
         assert len(engine.messages) == 3
 
     @pytest.mark.asyncio
+    async def test_rollback_current_turn_drops_appended_messages(self):
+        """Regression v1.0.0/C2: rollback_current_turn must remove every
+        message appended since the most recent submit() began, so a
+        cancelled turn doesn't pollute the next turn's context.
+        """
+        mock_client = AsyncMock(spec=LLMClient)
+        mock_client.chat = AsyncMock(return_value=_resp(Message.assistant(content="reply")))
+        registry = ToolRegistry()
+        engine = ConversationEngine(client=mock_client, registry=registry, system_prompt="t")
+        baseline = len(engine.messages)
+        await engine.submit("hello")
+        # submit() appended a user message + assistant reply
+        assert len(engine.messages) > baseline
+        # Simulate cancellation: pretend submit failed mid-way
+        engine._turn_start_message_count = baseline
+        removed = engine.rollback_current_turn()
+        assert removed > 0
+        assert len(engine.messages) == baseline
+
+    def test_rollback_current_turn_is_idempotent_when_no_active_turn(self):
+        """rollback_current_turn called outside an active turn should
+        be a no-op (no exception, returns 0)."""
+        mock_client = AsyncMock(spec=LLMClient)
+        registry = ToolRegistry()
+        engine = ConversationEngine(client=mock_client, registry=registry, system_prompt="t")
+        # No submit() called yet — _turn_start_message_count is None
+        removed = engine.rollback_current_turn()
+        assert removed == 0
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("empty_content", ["", "   ", "\n\n\t", None])
     async def test_empty_assistant_response_does_not_crash(self, empty_content):
         """Regression: planner/assistant returning empty or whitespace-only content

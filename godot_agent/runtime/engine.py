@@ -897,6 +897,9 @@ class ConversationEngine:
     async def submit(self, user_input: str) -> str:
         if not _has_meaningful_text(user_input):
             return ""
+        # v1.0.0/C2: snapshot message-list length so rollback_current_turn
+        # can revert any messages this submission appended on cancellation.
+        self._turn_start_message_count = len(self.messages)
         self.last_user_input = user_input
         self.refresh_intent_profile(user_input)
         self._sync_registry_context()
@@ -904,6 +907,26 @@ class ConversationEngine:
         self.messages.append(Message.user(user_input))
         self._emit_event("turn_started", user_input.splitlines()[0][:120], user_input=user_input)
         return await self._run_loop(None, use_streaming=self.use_streaming)
+
+    def rollback_current_turn(self) -> int:
+        """Drop any messages appended since the last submit() began.
+
+        Used when the user hits Ctrl+C mid-turn to keep the message
+        history clean — without this, the cancelled turn's partial
+        messages (planner system message, the user input, any tool
+        calls and assistant deltas) stay in `self.messages` and pollute
+        the next turn's context (regression v1.0.0/C2).
+
+        Returns the number of messages removed.
+        """
+        snapshot = getattr(self, "_turn_start_message_count", None)
+        if snapshot is None or snapshot >= len(self.messages):
+            return 0
+        removed = len(self.messages) - snapshot
+        self.messages = self.messages[:snapshot]
+        self._turn_start_message_count = None
+        self._emit_event("turn_cancelled", f"turn cancelled, dropped {removed} messages")
+        return removed
 
     async def submit_with_images(self, text: str, images_b64: list[str]) -> str:
         if not images_b64 and not _has_meaningful_text(text):

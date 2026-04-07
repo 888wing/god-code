@@ -1775,6 +1775,11 @@ def chat(project: str = ".", config: str | None = None):
                         await _edit_intent_profile(checkpoint=True)
                         engine.refresh_intent_profile(user_input)
                         _refresh_workspace()
+                    # v1.0.0/C2: submit returns naturally for both streaming
+                    # and non-streaming paths. KeyboardInterrupt is propagated
+                    # at the next await point and caught below — combined with
+                    # rollback_current_turn(), this ensures cancelled turns
+                    # don't pollute the message history of the next turn.
                     if cfg.streaming and engine.on_stream_chunk:
                         response = await engine.submit(user_input)
                     else:
@@ -1783,6 +1788,8 @@ def chat(project: str = ".", config: str | None = None):
                         display.agent_response(response)
                 except KeyboardInterrupt:
                     display.info("Cancelled")
+                    if hasattr(engine, "rollback_current_turn"):
+                        engine.rollback_current_turn()
                     continue
                 except httpx.HTTPStatusError as e:
                     status_code = e.response.status_code if e.response is not None else "?"
