@@ -1,0 +1,30 @@
+# Gitleaks config for god-code
+#
+# Purpose: local pre-commit regression prevention against accidental
+# secret commits. Extends gitleaks default ruleset, plus allowlists
+# for known false positives (docs with example tokens, tests of the
+# secret-masking utility).
+#
+# See https://github.com/gitleaks/gitleaks for config reference.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "god-code global allowlist"
+
+paths = [
+  # Audit artifacts (local only, gitignored)
+  '''\.audit/''',
+
+  # Design docs may contain example API keys in code blocks
+  # (e.g. "backend_api_key=gc_live_testkey123" as documentation).
+  # Reviewers must still visually scan any new docs/plans/ additions.
+  '''docs/plans/.*\.md''',
+
+  # Tests for the secret-masking utility. These files exist to verify
+  # that secret-shaped strings are properly masked for display, so
+  # they intentionally contain fake-but-realistic token literals.
+  # If you add NEW files that test masking, extend this list.
+  '''tests/test_runtime_switch_commands\.py''',
+]
