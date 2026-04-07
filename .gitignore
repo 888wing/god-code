@@ -13,3 +13,4 @@ auth.json
 .codetape/traces/
 .codetape/drift.json
 site/
+.audit/

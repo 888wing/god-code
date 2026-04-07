@@ -37,6 +37,15 @@ Repository = "https://github.com/888wing/god-code"
 
 [tool.hatch.build.targets.wheel]
 packages = ["godot_agent"]
+exclude = [
+  "**/config.json",
+  "**/auth.json",
+  "**/.env",
+  "**/.env.*",
+  "**/*.key",
+  "**/*.pem",
+  "**/.DS_Store",
+]
 
 [build-system]
 requires = ["hatchling"]
