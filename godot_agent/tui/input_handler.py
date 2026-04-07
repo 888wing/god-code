@@ -288,9 +288,13 @@ async def get_input_async(
 
 
 def get_multiline_continuation(session: PromptSession) -> str | None:
-    """Get continuation line for multi-line input."""
+    """Get continuation line for multi-line input.
+
+    v1.0.0/D4: shows an explicit cancel hint so users don't get
+    trapped in multiline mode without knowing how to escape.
+    """
     try:
-        return session.prompt(HTML("<dim>...</dim> "))
+        return session.prompt(HTML('<dim>... (""" to finish · Ctrl+C to cancel)</dim> '))
     except (EOFError, KeyboardInterrupt):
         return None
 
@@ -298,6 +302,8 @@ def get_multiline_continuation(session: PromptSession) -> str | None:
 async def get_multiline_continuation_async(session: PromptSession) -> str | None:
     """Async continuation prompt for multi-line input."""
     try:
-        return await session.prompt_async(HTML("<dim>...</dim> "))
+        return await session.prompt_async(
+            HTML('<dim>... (""" to finish · Ctrl+C to cancel)</dim> ')
+        )
     except (EOFError, KeyboardInterrupt):
         return None

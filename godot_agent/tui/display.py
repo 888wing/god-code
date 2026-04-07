@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from rich.columns import Columns
@@ -148,55 +149,79 @@ class ChatDisplay:
         )
         title = Text("God Code", style="bold cyan")
         spec = get_mode_spec(mode)
-        parts = [f"Session: {session_id}"]
-        if provider:
-            parts.append(f"Provider: {provider}")
-        parts.extend([f"Model: {model}", f"Effort: {effort}", f"Mode: {spec.label}"])
-        parts.append(f"Skills: {skill_mode}")
-        parts.append(f"Quality: {quality_target}")
-        if project_name:
-            parts.append(f"Project: {project_name}")
-        else:
-            parts.append(f"Dir: {project_path}")
-        subtitle = Text(" | ".join(parts), style="dim")
+        # v1.0.0/D3: previous welcome packed 8 fields on one line, wrapping
+        # ugly on terminals < 120 cols. Trim to 4 essentials; the rest are
+        # accessible via /workspace whenever the user wants them.
+        parts = [
+            f"Session {session_id[:8]}",
+            f"Mode {spec.label}",
+            f"Model {model}",
+            f"Project {project_name or Path(project_path).name or '-'}" if project_path else "Dir -",
+        ]
+        subtitle = Text(" · ".join(parts), style="dim")
         self.console.print()
         self.console.print(Panel(title, subtitle=subtitle, border_style="cyan", padding=(0, 2)))
+        # v1.0.0/H2: tab-completion hint, since otherwise a power feature
+        # nobody discovers.
+        self.console.print(
+            "  [dim]Type / for commands · Tab for autocomplete · /help for cheat sheet[/]"
+        )
 
     def no_project_warning(self) -> None:
         self.add_activity("No project.godot found in the current directory")
         self.console.print("[yellow]  No project.godot found. Use /cd to navigate to a Godot project.[/]")
 
     def commands_table(self) -> Table:
+        # v1.0.0/E1: previous flat 27-row table was overwhelming. Group
+        # commands by purpose so users can scan to the section they need.
         t = Table(show_header=False, box=None, padding=(0, 2), show_edge=False)
         t.add_column(style="green")
         t.add_column(style="dim")
+
+        def section(label: str) -> None:
+            t.add_row("", "")
+            t.add_row(f"[bold cyan]{label}[/]", "")
+
+        section("Project")
         t.add_row("/cd <path>", "change project directory")
-        t.add_row("/mode [name]", "show or change interaction mode")
-        t.add_row("/provider [name]", "show or switch provider")
-        t.add_row("/model [name]", "show or switch model")
-        t.add_row("/effort [level]", "show or switch reasoning effort")
-        t.add_row("/skills [cmd]", "list or override internal skills")
+        t.add_row("/info", "show project details")
         t.add_row("/intent [cmd]", "show or confirm gameplay intent")
         t.add_row("/quality", "show the current project quality target")
         t.add_row("/assetspec", "show the current sprite and asset constraints")
+
+        section("Chat")
+        t.add_row("/mode [name]", "show or change interaction mode")
+        t.add_row("/auto <request>", "plan, approve, and auto-execute a task")
         t.add_row("/playtest [relevant|all|id]", "run scripted playtest contracts")
         t.add_row("/scenarios", "list built-in playtest scenarios")
         t.add_row("/contracts [relevant|all|id]", "show scripted-route contract details")
-        t.add_row("/info", "show project details")
-        t.add_row("/status", "show provider, model, auth, and mode")
-        t.add_row("/usage", "show token usage and cost")
-        t.add_row("/settings", "show all settings")
-        t.add_row("/set <key> <val>", "change a setting")
+
+        section("Session")
         t.add_row("/sessions", "list recent saved sessions")
         t.add_row("/resume [id]", "resume latest or chosen session")
         t.add_row("/new", "start a fresh session")
         t.add_row("/save", "save session snapshot")
         t.add_row("/load", "alias for /resume latest")
         t.add_row("/workspace", "show the workspace snapshot")
-        t.add_row("/auto <request>", "plan, approve, and auto-execute a task")
-        t.add_row("/menu", "open the interactive command menu")
+
+        section("Settings")
+        t.add_row("/provider [name]", "show or switch provider")
+        t.add_row("/model [name]", "show or switch model")
+        t.add_row("/effort [level]", "show or switch reasoning effort")
+        t.add_row("/skills [cmd]", "list or override internal skills")
+        t.add_row("/settings", "show all settings")
+        t.add_row("/set <key> <val>", "change a setting (Tab autocompletes keys)")
+
+        section("Info")
+        t.add_row("/status", "show provider, model, auth, and mode")
+        t.add_row("/usage", "show token usage and cost")
         t.add_row("/version", "show current version and check for updates")
+        t.add_row("/menu", "open the interactive command menu")
+        t.add_row("/help", "this cheat sheet")
+
+        section("Exit")
         t.add_row("/exit", "exit (also: /quit, Ctrl+C)")
+
         return t
 
     def workspace_snapshot(self, *, show_commands: bool = False) -> None:
@@ -264,7 +289,9 @@ class ChatDisplay:
         activity_table = Table(show_header=False, box=None, padding=(0, 1))
         activity_table.add_column(style="dim")
         if self.activity_log:
-            for item in self.activity_log[-8:]:
+            # v1.0.0/E2: was [-8:] while add_activity caps at [-10:],
+            # silently dropping the 2 oldest visible entries. Now both 10.
+            for item in self.activity_log[-10:]:
                 activity_table.add_row(item)
         else:
             activity_table.add_row("No activity yet")

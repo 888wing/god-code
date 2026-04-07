@@ -1503,7 +1503,17 @@ def chat(project: str = ".", config: str | None = None):
                             multiline_buffer.append(line)
                             continue
                     else:
-                        user_input = await get_input_async(input_session, completer, bottom_toolbar=_toolbar())
+                        # v1.0.0/E4: surface mode in the prompt itself so users
+                        # don't lose track of which mode they're in across long
+                        # sessions. Color matches the mode label semantics.
+                        _mode_color = {"apply": "green", "fix": "red", "plan": "yellow", "explain": "cyan", "review": "magenta"}.get(cfg.mode, "green")
+                        _prompt_markup = f"<{_mode_color}>you [{cfg.mode}]&gt;</{_mode_color}> "
+                        user_input = await get_input_async(
+                            input_session,
+                            completer,
+                            bottom_toolbar=_toolbar(),
+                            prompt_markup=_prompt_markup,
+                        )
                         if user_input is None:
                             break
                         if _starts_multiline_input(user_input):
