@@ -24,6 +24,34 @@ class TokenUsage:
         return (self.prompt_tokens * inp_rate + self.completion_tokens * out_rate) / 1_000_000
 
 
+def is_known_model_pricing(model: str) -> bool:
+    """Returns True if the model has explicit pricing in the pricing table.
+
+    Used by the TUI to display "unknown pricing" instead of a misleading
+    fallback estimate (regression v1.0.0/C5). Without this signal, an
+    unknown custom model silently uses gpt-4o pricing and the user
+    sees a number that has no relationship to their actual cost.
+    """
+    canonical = canonical_model_name(model)
+    known_exact = {
+        "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano",
+        "claude-opus-4.6", "claude-sonnet-4.6", "claude-haiku-4.5",
+        "gemini-3.1-pro", "gemini-3-flash", "gemini-3.1-flash-lite",
+        "grok-4.20-reasoning", "grok-4.20-non-reasoning", "grok-4-1-fast-reasoning",
+        "glm-5", "glm-4.7-flash", "glm-4.5",
+        "minimax-m2.7", "minimax-m2.5", "abab 6.5s",
+    }
+    if canonical in known_exact:
+        return True
+    known_prefixes = (
+        "gpt-5.4", "claude-opus-4.6", "claude-sonnet-4.6", "claude-haiku-4.5",
+        "gemini-3.1-pro", "gemini-3-flash", "gemini-3.1-flash-lite",
+        "grok-4", "glm-5", "glm-4.7-flash", "glm-4.5",
+        "minimax", "abab", "gpt-4o", "gpt-4o-mini",
+    )
+    return any(canonical.startswith(p) for p in known_prefixes)
+
+
 @dataclass
 class ToolCall:
     id: str

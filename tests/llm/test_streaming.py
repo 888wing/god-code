@@ -8,7 +8,34 @@ import pytest
 
 from godot_agent.llm.client import LLMClient
 from godot_agent.llm.streaming import _stream_via_backend, _stream_direct
-from godot_agent.llm.types import LLMConfig, Message
+from godot_agent.llm.types import LLMConfig, Message, is_known_model_pricing
+
+
+class TestKnownModelPricing:
+    """Regression v1.0.0/C5: is_known_model_pricing must distinguish
+    models with explicit pricing from custom/unknown ones, so the TUI
+    can show "unknown" instead of a misleading fallback estimate.
+    """
+
+    def test_known_models_return_true(self):
+        for model in [
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "claude-opus-4.6",
+            "claude-sonnet-4.6",
+            "gemini-3.1-pro",
+            "grok-4.20-reasoning",
+        ]:
+            assert is_known_model_pricing(model), f"{model} should be known"
+
+    def test_unknown_models_return_false(self):
+        for model in [
+            "my-custom-llama-7b",
+            "internal-tuned-mistral",
+            "totally-made-up-model",
+            "",
+        ]:
+            assert not is_known_model_pricing(model), f"{model} should be unknown"
 
 
 def _make_client(*, backend_url: str = "") -> LLMClient:

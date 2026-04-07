@@ -229,11 +229,17 @@ def _check_update(verbose: bool = False) -> None:
             click.echo("  Could not reach update server.")
             click.echo()
     except Exception:
+        # v1.0.0/C4: previously this swallowed the failure entirely on startup
+        # (verbose=False), so users on intermittent networks never knew the
+        # update check was attempted at all. Always emit a brief dim line so
+        # the absence of an update prompt isn't ambiguous.
         if verbose:
             click.echo()
             click.secho(f"  god-code v{_VERSION}", fg="cyan", bold=True)
             click.echo("  Could not check for updates (offline?).")
             click.echo()
+        else:
+            click.secho("  [update check offline — using local version]", fg="bright_black")
 
 
 def _run_setup_wizard(config_path: Path | None = None) -> None:
@@ -897,7 +903,16 @@ def chat(project: str = ".", config: str | None = None):
         if target == "latest" and record is None:
             record = load_latest_session(cfg.session_dir)
         if not record:
-            display.error("No saved sessions found")
+            # v1.0.0/C6: differentiate "no sessions at all" from
+            # "this specific id doesn't exist" so the user knows
+            # whether they typed the wrong id or the dir is empty.
+            if target != "latest":
+                display.error(
+                    f"No session found with id '{target}'. "
+                    "Run /sessions to see available ids, or /resume latest."
+                )
+            else:
+                display.error("No saved sessions found. Use /new to start a fresh session.")
             return False
 
         if record.mode:
@@ -1738,7 +1753,14 @@ def chat(project: str = ".", config: str | None = None):
                             err_body = e.response.json()
                             detail = err_body.get("error", {}).get("message", "") if isinstance(err_body.get("error"), dict) else str(err_body.get("error", ""))
                         except Exception:
-                            detail = e.response.text[:200]
+                            # Bump cap from 200 → 500 chars and add explicit
+                            # truncation marker so the user knows the rest
+                            # of the error body was cut (regression v1.0.0/B3).
+                            raw_text = e.response.text or ""
+                            if len(raw_text) > 500:
+                                detail = raw_text[:500] + " […truncated, run /status for full error]"
+                            else:
+                                detail = raw_text
                     detail_str = f": {detail}" if detail else ""
                     display.error(f"API request failed ({status_code}){detail_str}. The session is still active.")
                     continue
@@ -1747,10 +1769,13 @@ def chat(project: str = ".", config: str | None = None):
                 turn = engine.last_turn
                 sess = engine.session_usage
                 if turn:
+                    from godot_agent.llm.types import is_known_model_pricing
+                    cost_known = is_known_model_pricing(cfg.model)
                     display.usage_line(
                         turn.usage.total_tokens, turn.usage.prompt_tokens, turn.usage.completion_tokens,
                         turn.usage.cost_estimate(cfg.model), turn.tools_called,
                         sess.total_tokens, engine.session_api_calls, sess.cost_estimate(cfg.model),
+                        cost_known=cost_known,
                     )
 
                 if cfg.autosave_session:

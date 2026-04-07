@@ -389,17 +389,27 @@ class ChatDisplay:
             self.agent_response(buffered)
 
     def usage_line(self, total: int, prompt: int, completion: int, cost: float,
-                   tools: list[str], session_total: int, session_calls: int, session_cost: float) -> None:
+                   tools: list[str], session_total: int, session_calls: int, session_cost: float,
+                   *, cost_known: bool = True) -> None:
         tools_str = f"  tools: {', '.join(tools)}" if tools else ""
         self.update_session_metrics(session_total, session_calls, session_cost)
+        # When the model is not in the pricing table the cost is a misleading
+        # fallback (gpt-4o rate). Show "unknown" instead so users don't trust
+        # a number that has no relationship to their actual bill (v1.0.0/C5).
+        if cost_known:
+            cost_str = f"~${cost:.4f}"
+            session_cost_str = f"~${session_cost:.4f}"
+        else:
+            cost_str = "[yellow]~$unknown[/] [dim](model not in pricing table)[/]"
+            session_cost_str = "[yellow]~$unknown[/]"
         self.console.print(
-            f"  [dim]tokens: {total:,} (in:{prompt:,} out:{completion:,}) "
-            f"~${cost:.4f}{tools_str}[/]"
+            f"  [dim]tokens: {total:,} (in:{prompt:,} out:{completion:,})[/] "
+            f"{cost_str}[dim]{tools_str}[/]"
         )
         self.console.print(
             f"  [dim]session: {session_total:,} tokens "
             f"| {session_calls} API calls "
-            f"| ~${session_cost:.4f} total[/]"
+            f"| {session_cost_str}[dim] total[/]"
         )
         self.console.print()
 
