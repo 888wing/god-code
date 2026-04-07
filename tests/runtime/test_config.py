@@ -17,6 +17,18 @@ class TestAgentConfig:
         assert config.mode == "apply"
         assert config.autosave_session is True
 
+    def test_max_tokens_default_supports_long_reports(self):
+        """Regression v1.0.0/B1: max_tokens default must be high enough for
+        comprehensive reports. The previous 16384 default truncated long
+        multi-section reports mid-output. gpt-5.4 supports 128K output;
+        65536 is the conservative middle ground.
+        """
+        config = AgentConfig()
+        assert config.max_tokens >= 65536, (
+            f"max_tokens default is {config.max_tokens}, must be >= 65536 "
+            "to avoid truncating long technical reports"
+        )
+
     def test_from_dict(self):
         data = {"model": "gpt-4o-mini", "max_turns": 10}
         config = AgentConfig.model_validate(data)

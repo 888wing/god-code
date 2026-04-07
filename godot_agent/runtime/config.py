@@ -19,7 +19,7 @@ class AgentConfig(BaseModel):
     reasoning_effort: str = "high"
     oauth_token: str | None = None
     max_turns: int = 20
-    max_tokens: int = 16384  # gpt-5.4 supports up to 128K output
+    max_tokens: int = 65536  # gpt-5.4 supports up to 128K output; 65K avoids truncating long reports
     temperature: float = 0.0
 
     # Godot
