@@ -52,6 +52,7 @@ class ChatDisplay:
         self.session_cost = 0.0
         self._stream_buffer = ""
         self._stream_live: Live | None = None
+        self._tool_status = None
 
     def add_activity(self, message: str) -> None:
         clean = " ".join(message.split())
@@ -286,11 +287,28 @@ class ChatDisplay:
         self.console.print(Group(*content))
 
     def tool_start(self, tool_name: str, args_summary: str) -> None:
-        label = f"{tool_name}({args_summary})" if args_summary else tool_name
+        # Cap long args so a grep regex / huge file content doesn't overflow
+        # the terminal and corrupt TUI rendering (v1.0.0/B4).
+        truncated_args = args_summary
+        if len(args_summary) > 100:
+            truncated_args = args_summary[:100] + "…"
+        label = f"{tool_name}({truncated_args})" if truncated_args else tool_name
         self.add_activity(f"tool start: {label}")
         self.console.print(f"  [dim]> {label}[/]")
+        # Open a status spinner so long-running tools (validation, sprite gen,
+        # screenshot — all 10-60s typical) show movement instead of leaving
+        # the user staring at "tool: started" for a minute (v1.0.0/A2).
+        if self._tool_status is None:
+            self._tool_status = self.console.status(
+                f"[dim]{tool_name} running…[/]", spinner="dots"
+            )
+            self._tool_status.start()
 
     def tool_result(self, tool_name: str, success: bool, summary: str = "") -> None:
+        # Close the spinner first so the result line is the last thing printed.
+        if self._tool_status is not None:
+            self._tool_status.stop()
+            self._tool_status = None
         self.add_activity(f"tool {'ok' if success else 'fail'}: {tool_name} - {summary or 'done'}")
         if success:
             self.console.print(f"  [dim green]  ok  {summary}[/]" if summary else "  [dim green]  ok[/]")

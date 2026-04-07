@@ -47,6 +47,34 @@ def test_streaming_end_prints_blank_line_separator():
     )
 
 
+def test_tool_start_caps_long_args_at_100_chars():
+    """Regression v1.0.0/B4: tool_start used to print the entire
+    args_summary, which for grep regexes or large file content could
+    overflow the terminal and corrupt the TUI rendering. Cap at 100.
+    """
+    display = ChatDisplay(console=Console(record=True))
+    long_args = "x" * 500
+    display.tool_start("grep", long_args)
+    captured = display.console.export_text()
+    # The rendered tool line should not contain the full 500 chars.
+    assert "x" * 500 not in captured, "tool_start failed to cap long args"
+    assert "…" in captured, "truncated args should end with an ellipsis marker"
+
+
+def test_tool_start_opens_status_spinner_and_result_closes_it():
+    """Regression v1.0.0/A2: tool_start should open a status spinner
+    that shows movement during long-running tools (validation, sprite
+    gen can take 30-60s); tool_result must close it. Without this,
+    users see 'tool: started' then nothing for a minute.
+    """
+    display = ChatDisplay(console=Console(record=True))
+    assert getattr(display, "_tool_status", None) is None
+    display.tool_start("run_godot", "validate")
+    assert display._tool_status is not None, "tool_start did not open a status spinner"
+    display.tool_result("run_godot", success=True, summary="ok")
+    assert display._tool_status is None, "tool_result did not close the status spinner"
+
+
 def test_handle_intent_event_updates_display_state():
     display = ChatDisplay(console=Console(record=True))
 
