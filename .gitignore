@@ -14,3 +14,4 @@ auth.json
 .codetape/drift.json
 site/
 .audit/
+.worktrees/
