@@ -112,6 +112,61 @@ def test_handle_diff_failed_event_logs_to_activity():
     )
 
 
+def test_handle_tool_progress_event_logs_stage():
+    """Regression v1.0.1/D3: tool_progress event must surface the
+    current stage so users see what a multi-stage slow tool is doing
+    instead of staring at a static spinner label."""
+    display = ChatDisplay(console=Console(record=True))
+    display.handle_event(
+        EngineEvent(
+            kind="tool_progress",
+            message="generate_sprite: post-processing (2/5)",
+            data={
+                "tool_name": "generate_sprite",
+                "step": 2,
+                "total": 5,
+                "label": "post-processing sprite",
+            },
+        )
+    )
+    log_text = " ".join(display.activity_log)
+    assert "generate_sprite" in log_text
+    assert "2/5" in log_text
+    assert "post-processing" in log_text
+
+
+def test_handle_plan_pruned_event_logs_drop_count():
+    """Regression v1.0.1/T1: plan_pruned event must surface the number
+    of stale plan blocks dropped so dogfood can verify token savings."""
+    display = ChatDisplay(console=Console(record=True))
+    display.handle_event(
+        EngineEvent(
+            kind="plan_pruned",
+            message="Pruned 1 stale planner block",
+            data={"dropped": 1, "kept": 2},
+        )
+    )
+    log_text = " ".join(display.activity_log)
+    assert "pruned" in log_text.lower()
+    assert "1" in log_text
+
+
+def test_handle_planner_skipped_event_logs_reason():
+    """Regression v1.0.1/T2: planner_skipped event must show the reason
+    so users understand why a turn skipped the planner pass."""
+    display = ChatDisplay(console=Console(record=True))
+    display.handle_event(
+        EngineEvent(
+            kind="planner_skipped",
+            message="Planner skipped: readonly_intent:what",
+            data={"reason": "readonly_intent:what"},
+        )
+    )
+    log_text = " ".join(display.activity_log)
+    assert "skipped" in log_text.lower()
+    assert "readonly" in log_text or "what" in log_text
+
+
 def test_handle_intent_event_updates_display_state():
     display = ChatDisplay(console=Console(record=True))
 

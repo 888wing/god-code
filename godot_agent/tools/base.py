@@ -10,6 +10,44 @@ class ToolResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+def emit_tool_progress(
+    context: Any,
+    *,
+    tool_name: str,
+    step: int,
+    total: int,
+    label: str,
+) -> None:
+    """Emit a tool_progress event for a multi-stage tool (v1.0.1/D3).
+
+    Called by slow tools (generate_sprite, vision iteration, run_godot)
+    during their phase transitions so the TUI spinner can update its
+    label from the static tool name to something like
+    ``generate_sprite: post-processing (2/5)`` — giving the user a
+    sense of progress instead of staring at a static string for 30-60s.
+
+    The helper is a no-op when the execution context is missing or has
+    no emit_event callback, so tools stay callable from tests and
+    direct-invoke paths without crashing.
+
+    Event shape:
+        kind: "tool_progress"
+        message: f"{tool_name}: {label} ({step}/{total})"
+        data: {tool_name, step, total, label}
+    """
+    if context is None:
+        return
+    emit = getattr(context, "emit_event", None)
+    if emit is None:
+        return
+    message = f"{tool_name}: {label} ({step}/{total})"
+    emit(
+        "tool_progress",
+        message,
+        {"tool_name": tool_name, "step": step, "total": total, "label": label},
+    )
+
+
 class BaseTool(ABC):
     name: str
     description: str

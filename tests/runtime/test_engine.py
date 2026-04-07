@@ -495,6 +495,81 @@ def test_engine_has_check_health():
     assert hasattr(ConversationEngine, '_check_auto_health')
 
 
+class TestToolProgressEvents:
+    """Regression v1.0.1/D3: slow multi-stage tools emit tool_progress
+    events during execution so the TUI spinner can show which stage is
+    running instead of a static label. Completes v1.0.0/A2 which only
+    shipped the Layer 1 universal spinner.
+    """
+
+    @pytest.mark.asyncio
+    async def test_emit_tool_progress_helper_fires_event(self):
+        """The tool_progress event kind flows through _emit_event and is
+        delivered to the on_event callback with step/total in its data."""
+        engine = ConversationEngine(
+            client=AsyncMock(spec=LLMClient),
+            registry=ToolRegistry(),
+            system_prompt="t",
+        )
+        events_seen: list[tuple[str, dict]] = []
+        engine.on_event = lambda e: events_seen.append((e.kind, e.data))
+
+        engine._emit_event(
+            "tool_progress",
+            "generate_sprite: calling API",
+            tool_name="generate_sprite",
+            step=1,
+            total=4,
+        )
+
+        assert len(events_seen) == 1
+        kind, data = events_seen[0]
+        assert kind == "tool_progress"
+        assert data["tool_name"] == "generate_sprite"
+        assert data["step"] == 1
+        assert data["total"] == 4
+
+    def test_tool_progress_context_helper_emits_via_execution_context(self):
+        """Tools can emit tool_progress via a context helper that
+        forwards to the execution context's emit_event callback."""
+        from godot_agent.tools.base import emit_tool_progress
+        from godot_agent.security.policies import ToolExecutionContext
+
+        events_seen = []
+        ctx = ToolExecutionContext()
+        ctx.emit_event = lambda kind, msg, data: events_seen.append((kind, msg, data))
+
+        emit_tool_progress(
+            ctx,
+            tool_name="generate_sprite",
+            step=2,
+            total=5,
+            label="post-processing sprite",
+        )
+
+        assert len(events_seen) == 1
+        kind, msg, data = events_seen[0]
+        assert kind == "tool_progress"
+        assert "post-processing" in msg
+        assert data["tool_name"] == "generate_sprite"
+        assert data["step"] == 2
+        assert data["total"] == 5
+
+    def test_emit_tool_progress_helper_is_a_noop_when_context_missing(self):
+        """Tools may be called outside an engine (tests, direct invoke).
+        emit_tool_progress must not crash when context or emit_event is
+        None."""
+        from godot_agent.tools.base import emit_tool_progress
+        from godot_agent.security.policies import ToolExecutionContext
+
+        # No context
+        emit_tool_progress(None, tool_name="x", step=1, total=3, label="test")
+
+        # Context without emit_event
+        ctx = ToolExecutionContext()
+        emit_tool_progress(ctx, tool_name="x", step=1, total=3, label="test")
+
+
 class TestChatLoopCancellation:
     """Regression v1.0.1/D1: the chat loop must cancel the running
     submit task cleanly on Ctrl+C, terminating any spawned subprocesses

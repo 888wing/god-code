@@ -835,6 +835,36 @@ class ChatDisplay:
             self.add_activity(
                 f"tool: {tool_name} result truncated ({cut} chars cut, {original} total)"
             )
+        elif event.kind == "tool_progress":
+            # v1.0.1/D3: per-tool progress updates for slow multi-stage tools.
+            # Update the active status spinner's label so the user sees what
+            # stage the tool is in instead of a static tool name for 20-60s.
+            tool_name = event.data.get("tool_name", "?")
+            step = event.data.get("step", 0)
+            total = event.data.get("total", 0)
+            label = event.data.get("label", "")
+            self.add_activity(f"tool: {tool_name} ({step}/{total}) {label}")
+            # If there's an active tool status spinner, update its label
+            status = getattr(self, "_active_tool_status", None)
+            if status is not None:
+                try:
+                    status.update(f"[yellow]tool: {tool_name} ({step}/{total}) {label}[/]")
+                except Exception:
+                    pass
+        elif event.kind == "plan_pruned":
+            # v1.0.1/T1: visible signal that old planner blocks were dropped
+            # from history. Dogfood uses this to verify token savings.
+            dropped = event.data.get("dropped", 0)
+            kept = event.data.get("kept", 0)
+            self.add_activity(
+                f"planner: pruned {dropped} stale block(s) (keeping latest {kept})"
+            )
+        elif event.kind == "planner_skipped":
+            # v1.0.1/T2: visible signal that the planner was skipped on a
+            # trivial read-only input. Helps users understand why their
+            # turn was faster than expected.
+            reason = event.data.get("reason", "unknown")
+            self.add_activity(f"planner: skipped ({reason})")
         elif event.kind == "context_compacted":
             self.add_activity(event.message)
         elif event.kind == "intent_inferred":

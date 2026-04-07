@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from godot_agent.prompts.image_templates import build_image_prompt
 from godot_agent.runtime.design_memory import AssetSpec, load_design_memory
 from godot_agent.runtime.visual_regression import build_artifact_path, compare_image_files, resolve_baseline_path, write_failure_bundle
-from godot_agent.tools.base import BaseTool, ToolResult
+from godot_agent.tools.base import BaseTool, ToolResult, emit_tool_progress
 from godot_agent.tools.godot_cli import run_godot_import
 from godot_agent.tools.screenshot import ScreenshotTool
 from godot_agent.tools.sprite_pipeline import parse_hex_color, post_process_sprite
@@ -74,10 +74,15 @@ class GenerateSpriteTool(BaseTool):
             )
             log.info("Image prompt: %s", prompt[:100])
 
+            # v1.0.1/D3: emit per-phase progress so the TUI spinner can
+            # show the user what stage the generate_sprite tool is in
+            # during its 20-60s wall-clock. 5 phases total.
+            ctx = getattr(self, "_execution_context", None)
+            emit_tool_progress(ctx, tool_name=self.name, step=1, total=5, label="requesting image from API")
+
             # Call image generation API via LLM client or direct fallback
             api_key = ""
             base_url = "https://api.openai.com/v1"
-            ctx = getattr(self, "_execution_context", None)
             llm_client = getattr(ctx, "llm_client", None) if ctx else None
             if llm_client:
                 api_key = llm_client.config.api_key
@@ -138,6 +143,7 @@ class GenerateSpriteTool(BaseTool):
             )
             target_size = asset_spec.target_size[0] if asset_spec.target_size else input.size
 
+            emit_tool_progress(ctx, tool_name=self.name, step=2, total=5, label="post-processing sprite")
             # Post-process
             processed = post_process_sprite(
                 raw_bytes,
@@ -145,6 +151,7 @@ class GenerateSpriteTool(BaseTool):
                 chroma_key=parse_hex_color(asset_spec.background_key) if asset_spec.background_key else (0, 255, 0),
             )
 
+            emit_tool_progress(ctx, tool_name=self.name, step=3, total=5, label="saving sprite file")
             # Save
             output = Path(input.output_path)
             output.parent.mkdir(parents=True, exist_ok=True)
@@ -158,6 +165,7 @@ class GenerateSpriteTool(BaseTool):
             baseline_matched: bool | None = None
             failure_bundle = ""
             if project_root:
+                emit_tool_progress(ctx, tool_name=self.name, step=4, total=5, label="running QA checks")
                 original_path = build_artifact_path(project_root, category="sprite-source", name=output.stem)
                 original_path.parent.mkdir(parents=True, exist_ok=True)
                 original_path.write_bytes(raw_bytes)
@@ -174,6 +182,7 @@ class GenerateSpriteTool(BaseTool):
                     issues = "; ".join(qa_report.issues)
                     return ToolResult(error=f"Generated sprite failed QA: {issues} (report: {qa_report_path})")
                 if input.reimport_assets:
+                    emit_tool_progress(ctx, tool_name=self.name, step=5, total=5, label="reimporting assets in Godot")
                     import_result = await run_godot_import(project_root, godot_path=input.godot_path)
                     reimported = True
                     import_warnings = [warning.message for warning in import_result.report.warnings]
