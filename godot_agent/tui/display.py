@@ -773,6 +773,14 @@ class ChatDisplay:
             path = event.data.get("path", "?")
             reason = event.data.get("reason", "unknown")
             self.add_activity(f"diff: failed for {path} ({reason[:60]})")
+        elif event.kind == "tool_result_truncated":
+            tool_name = event.data.get("tool_name", "?")
+            original = int(event.data.get("original_length", 0))
+            truncated = int(event.data.get("truncated_length", 0))
+            cut = max(0, original - truncated)
+            self.add_activity(
+                f"tool: {tool_name} result truncated ({cut} chars cut, {original} total)"
+            )
         elif event.kind == "context_compacted":
             self.add_activity(event.message)
         elif event.kind == "intent_inferred":

@@ -650,6 +650,16 @@ class ConversationEngine:
             else:
                 raw = json.dumps(result.output.model_dump() if result.output else {})
                 content = truncate_tool_result(raw)
+                # Surface truncation so users know data was dropped from the
+                # context window the LLM sees (regression v1.0.0/B2, G2).
+                if len(content) < len(raw):
+                    self._emit_event(
+                        "tool_result_truncated",
+                        f"tool result truncated for {tc.name}",
+                        tool_name=tc.name,
+                        original_length=len(raw),
+                        truncated_length=len(content),
+                    )
             self.messages.append(Message.tool_result(tool_call_id=tc.id, content=content))
 
         return tool_names_used, modified_files

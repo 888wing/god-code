@@ -75,6 +75,25 @@ def test_tool_start_opens_status_spinner_and_result_closes_it():
     assert display._tool_status is None, "tool_result did not close the status spinner"
 
 
+def test_handle_tool_result_truncated_event_shows_char_count():
+    """Regression v1.0.0/B2/G2: tool_result_truncated event must
+    surface the number of chars cut so users know data was dropped
+    from the LLM's view of the tool output.
+    """
+    display = ChatDisplay(console=Console(record=True))
+    display.handle_event(
+        EngineEvent(
+            kind="tool_result_truncated",
+            message="tool result truncated",
+            data={"tool_name": "grep", "original_length": 5000, "truncated_length": 2000},
+        )
+    )
+    log_text = " ".join(display.activity_log)
+    assert "grep" in log_text
+    assert "truncated" in log_text
+    assert "3000" in log_text or "5000" in log_text
+
+
 def test_handle_diff_failed_event_logs_to_activity():
     """Regression v1.0.0/C1: diff_failed event must be visible in
     activity log so users know the modification happened but the
