@@ -11,6 +11,7 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
@@ -332,8 +333,17 @@ class ChatDisplay:
 
     def agent_streaming_start(self) -> None:
         self._stream_buffer = ""
+        # Show a thinking spinner during the silent reasoning phase before
+        # the first streamed token arrives. Without this placeholder, gpt-5.4
+        # with reasoning_effort=high left users staring at an empty cyan panel
+        # for 30-60s, indistinguishable from a frozen CLI (regression v1.0.0/A1).
         self._stream_live = Live(
-            Panel(Markdown(" "), title="[cyan]assistant[/]", border_style="cyan", padding=(1, 2)),
+            Panel(
+                Spinner("dots", text="[dim]thinking…[/]"),
+                title="[cyan]assistant[/]",
+                border_style="cyan",
+                padding=(1, 2),
+            ),
             console=self.console,
             refresh_per_second=12,
             transient=True,
@@ -352,6 +362,9 @@ class ChatDisplay:
         if self._stream_live:
             self._stream_live.stop()
             self._stream_live = None
+        # Blank line separator between successive assistant turns so back-to-back
+        # streamed responses don't visually blur together (v1.0.0/A3).
+        self.console.print()
         buffered = self._stream_buffer
         self._stream_buffer = ""
         if finalize and buffered.strip():
