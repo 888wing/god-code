@@ -46,6 +46,10 @@ class AgentConfig(BaseModel):
     enabled_skills: list[str] = Field(default_factory=list)
     disabled_skills: list[str] = Field(default_factory=list)
 
+    # Token efficiency (v1.0.1)
+    planner_lazy: bool = True  # Skip planner on trivial read-only turns (T2)
+    plan_history_keep: int = 2  # How many planner blocks to keep in history (T1)
+
     # Backend orchestration
     backend_url: str = ""                    # Empty = direct provider (current behavior)
     backend_cost_preference: str = "balanced"  # economy | balanced | quality

@@ -115,6 +115,24 @@ class TestLoadConfig:
         config = load_config(config_file)
         assert config.provider == "gemini"
 
+    def test_planner_lazy_default_true(self):
+        """Regression v1.0.1/T2: planner_lazy is on by default. Users who
+        want the v1.0.0 always-run behavior must explicitly opt out."""
+        config = AgentConfig()
+        assert config.planner_lazy is True
+
+    def test_plan_history_keep_default_two(self):
+        """Regression v1.0.1/T1: plan_history_keep defaults to 2 — current
+        plan plus one previous for 'what did I just do' context."""
+        config = AgentConfig()
+        assert config.plan_history_keep == 2
+
+    def test_planner_lazy_can_be_disabled(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({"planner_lazy": False}))
+        config = load_config(config_file)
+        assert config.planner_lazy is False
+
     def test_load_skill_settings_from_file(self, tmp_path):
         config_file = tmp_path / "config.json"
         config_file.write_text(json.dumps({

@@ -38,6 +38,99 @@ log = logging.getLogger(__name__)
 
 # Compact at 75% of 1.05M context to leave room for current turn
 _COMPACT_THRESHOLD = 787500  # 75% of 1.05M
+
+# v1.0.1/T2: lazy planner heuristic — action verbs trigger a plan pass,
+# read-only question words skip it. Kept as module-level frozen sets so
+# should_run_planner can't mutate them across calls.
+_ACTION_VERBS_EN = frozenset({
+    "implement", "add", "create", "build", "fix", "refactor", "rewrite",
+    "change", "update", "delete", "remove", "generate", "migrate",
+    "rename", "extract", "split", "merge", "introduce", "replace",
+})
+_ACTION_VERBS_ZH = frozenset({
+    "實作", "新增", "建立", "修", "重寫", "改", "刪除", "產生", "遷移",
+    "重構", "替換", "抽出", "合併", "引入", "更新", "加入", "加上",
+})
+_READONLY_INTENTS_EN = frozenset({
+    "what", "why", "how", "where", "which", "who", "when",
+    "show", "explain", "read", "list", "find", "describe", "display",
+    "print", "tell", "inspect", "view",
+})
+_READONLY_INTENTS_ZH = frozenset({
+    "為什麼", "如何", "顯示", "解釋", "讀", "列", "描述", "查看",
+    "印出", "看一下", "說明", "介紹",
+})
+# ZH interrogative patterns: if these appear anywhere, the sentence is a
+# question. Separate from _READONLY_INTENTS_ZH because these are positional-
+# independent (e.g. "player.gd 裡面有什麼?" is a question without starting
+# with an interrogative keyword).
+_ZH_INTERROGATIVE_PATTERNS = (
+    "什麼", "什么", "嗎?", "嗎?", "何時", "哪個", "哪裡", "哪里",
+)
+
+
+def should_run_planner(user_input: str) -> tuple[bool, str]:
+    """Heuristic: should the planner run for this user input?
+
+    Returns (run, reason). When run=False the caller should skip the
+    planner pass and emit a planner_skipped event with the reason.
+
+    Rules (in priority order):
+    1. Empty / whitespace-only → skip (caller already guards, this is defence)
+    2. Multiple file paths (res:// or .gd, >= 2) → run (multi-file scope)
+    3. > 5 lines → run (complex requests probably need planning)
+    4. Read-only intent keyword (first-token EN or 繁中 anywhere) → skip
+       — checked BEFORE action verbs so "如何實作 X" (how to implement X)
+       stays a question even though it contains an action verb.
+    5. Explicit action verb (EN or ZH) → run
+    6. Default → run (safe direction, preserves v1.0.0 behavior on ambiguity)
+    """
+    text = user_input.strip()
+    if not text:
+        return False, "empty_input"
+
+    # Rule 2: multiple file paths — strong signal for multi-file change
+    file_refs = text.count("res://") + sum(1 for token in text.split() if token.endswith(".gd"))
+    if file_refs >= 2:
+        return True, f"multi_file:{file_refs}"
+
+    # Rule 3: complex / long requests
+    line_count = text.count("\n") + 1
+    if line_count > 5:
+        return True, f"long_request:{line_count}_lines"
+
+    # Rule 4: read-only intents — checked before action verbs so that
+    # question-framed inputs ("how do I X", "如何 X") are correctly
+    # classified as questions even when they contain action verbs.
+    lower = text.lower()
+    first_token = lower.split()[0] if lower.split() else ""
+    if first_token in _READONLY_INTENTS_EN:
+        return False, f"readonly_intent:{first_token}"
+    # ZH uses prefix matching (not substring) to avoid false positives
+    # like "改 enemy 的血量顯示" matching "顯示" as readonly.
+    for intent in _READONLY_INTENTS_ZH:
+        if text.startswith(intent):
+            return False, f"readonly_intent:{intent}"
+    # Positional-independent ZH interrogative patterns catch cases like
+    # "player.gd 裡面有什麼?" that don't start with a keyword.
+    for pattern in _ZH_INTERROGATIVE_PATTERNS:
+        if pattern in text:
+            return False, f"interrogative:{pattern}"
+
+    # Rule 5: explicit action verbs
+    words = set(lower.split())
+    for verb in _ACTION_VERBS_EN:
+        if verb in words:
+            return True, f"action_verb:{verb}"
+    # ZH action verbs use prefix matching for the same reason as readonly.
+    for verb in _ACTION_VERBS_ZH:
+        if text.startswith(verb):
+            return True, f"action_verb:{verb}"
+
+    # Rule 6: default — run. Preserves v1.0.0 behavior on ambiguous input.
+    return True, "default_run"
+
+
 _FILE_MUTATING_TOOLS = {
     "write_file",
     "edit_file",
@@ -161,6 +254,9 @@ class ConversationEngine:
         # config (runtime/config.py `plan_history_keep`) or by setting on
         # the engine instance directly.
         self.plan_history_keep: int = 2
+        # v1.0.1/T2: skip the planner pass on trivial read-only turns.
+        # Set to False to restore v1.0.0's unconditional planner behavior.
+        self.planner_lazy: bool = True
         self.active_skills: list[str] = []
         self.skill_mode: str = "auto"
         self.enabled_skills: list[str] = []
@@ -886,6 +982,19 @@ class ConversationEngine:
     async def _maybe_run_planner(self, user_input: str) -> None:
         if self.dispatcher is None or self.mode not in {"apply", "fix"} or not _has_meaningful_text(user_input):
             return
+
+        # v1.0.1/T2: lazy planner — skip trivial read-only turns so we don't
+        # pay the full planner cost (LLM call + impact report + plan
+        # injection + rebill) on inputs that gain nothing from a plan pass.
+        if self.planner_lazy:
+            should_plan, reason = should_run_planner(user_input)
+            if not should_plan:
+                self._emit_event(
+                    "planner_skipped",
+                    f"Planner skipped: {reason}",
+                    reason=reason,
+                )
+                return
 
         self._emit_event("planner_started", "Running planner pass")
         if self.project_path:

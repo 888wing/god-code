@@ -495,6 +495,123 @@ def test_engine_has_check_health():
     assert hasattr(ConversationEngine, '_check_auto_health')
 
 
+class TestLazyPlannerTriggering:
+    """Regression v1.0.1/T2: planner must not run on trivial read-only
+    requests. Skipping those turns saves the full planner cost (LLM call +
+    impact report + plan injection + rebill) on inputs that gain nothing
+    from a plan pass.
+    """
+
+    @pytest.mark.parametrize(
+        "user_input,expected_run",
+        [
+            # Action verbs → run planner
+            ("implement combat logger in res://src/combat/logger.gd", True),
+            ("add HP bar to player scene", True),
+            ("fix the null reference in enemy.gd", True),
+            ("refactor the movement code", True),
+            ("rewrite the AI using behavior trees", True),
+            ("create a new enemy type with ranged attack", True),
+            # 繁中 action verbs
+            ("實作攻擊系統 in boss.gd", True),
+            ("修 player.gd 的碰撞 bug", True),
+            ("新增一個 HUD scene", True),
+            ("改 enemy 的血量顯示", True),
+            ("重寫 combat loop", True),
+            # Read-only / explain → skip planner
+            ("what is in player.gd?", False),
+            ("explain the combat loop", False),
+            ("show me the scene tree", False),
+            ("how does the spawner work?", False),
+            ("list all scripts in res://src", False),
+            ("describe the movement logic", False),
+            # 繁中 read-only
+            ("player.gd 裡面有什麼?", False),
+            ("解釋一下 combat loop", False),
+            ("顯示 scene tree", False),
+            ("如何實作碰撞?", False),
+            # Ambiguous / default-run (safe direction)
+            ("make sure the boss scene works correctly with the new layer scheme", True),
+            ("the animation is broken, need to check what's wrong and update it", True),
+        ],
+    )
+    def test_should_run_planner_heuristic(self, user_input: str, expected_run: bool):
+        from godot_agent.runtime.engine import should_run_planner
+        run, reason = should_run_planner(user_input)
+        assert run == expected_run, (
+            f"input: {user_input!r} expected run={expected_run}, got run={run} reason={reason!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_planner_skipped_emits_event_for_trivial_input(self):
+        """When the heuristic returns False, planner is not called and a
+        planner_skipped event fires with the reason."""
+        from godot_agent.agents.results import AgentTaskResult
+
+        mock_client = AsyncMock(spec=LLMClient)
+        mock_client.chat = AsyncMock(return_value=_resp(Message.assistant(content="done")))
+        registry = ToolRegistry()
+
+        class MockDispatcher:
+            def __init__(self):
+                self.called = False
+
+            async def run_planner(self, task):
+                self.called = True
+                return AgentTaskResult(role="planner", content="plan")
+
+        dispatcher = MockDispatcher()
+        engine = ConversationEngine(
+            client=mock_client,
+            registry=registry,
+            system_prompt="t",
+            mode="apply",
+            dispatcher=dispatcher,
+        )
+        events_seen: list[tuple[str, dict]] = []
+        engine.on_event = lambda e: events_seen.append((e.kind, e.data))
+
+        await engine._maybe_run_planner("what is in player.gd?")
+
+        assert dispatcher.called is False, "planner must not run on trivial input"
+        skipped_events = [e for e in events_seen if e[0] == "planner_skipped"]
+        assert len(skipped_events) == 1
+        # Event carries a reason for dogfood observability
+        assert "reason" in skipped_events[0][1]
+
+    @pytest.mark.asyncio
+    async def test_planner_lazy_false_preserves_v1_0_0_behavior(self):
+        """Setting planner_lazy=False on the engine restores unconditional
+        planner runs (the v1.0.0 behavior) for users who opt out."""
+        from godot_agent.agents.results import AgentTaskResult
+
+        mock_client = AsyncMock(spec=LLMClient)
+        mock_client.chat = AsyncMock(return_value=_resp(Message.assistant(content="done")))
+        registry = ToolRegistry()
+
+        class MockDispatcher:
+            def __init__(self):
+                self.called = False
+
+            async def run_planner(self, task):
+                self.called = True
+                return AgentTaskResult(role="planner", content="plan")
+
+        dispatcher = MockDispatcher()
+        engine = ConversationEngine(
+            client=mock_client,
+            registry=registry,
+            system_prompt="t",
+            mode="apply",
+            dispatcher=dispatcher,
+        )
+        engine.planner_lazy = False  # opt-out
+
+        await engine._maybe_run_planner("what is in player.gd?")
+        # With lazy disabled, the planner runs even for read-only inputs
+        assert dispatcher.called is True
+
+
 class TestPlannerHistoryPruning:
     """Regression v1.0.1/T1: planner blocks must be pruned from history so
     they don't accumulate across every apply/fix turn and inflate every

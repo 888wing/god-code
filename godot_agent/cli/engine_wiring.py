@@ -334,6 +334,11 @@ def _wire_engine_callbacks(
     engine.on_event = display.handle_event
     engine.auto_commit = cfg.auto_commit
     engine.use_streaming = cfg.streaming
+    # v1.0.1/T1+T2: propagate token-efficiency settings from config.
+    # getattr defensively so CLI flow tests that construct configs
+    # without these fields continue to work.
+    engine.planner_lazy = getattr(cfg, "planner_lazy", True)
+    engine.plan_history_keep = getattr(cfg, "plan_history_keep", 2)
     if cfg.streaming:
         engine.on_stream_start = display.agent_streaming_start
         engine.on_stream_chunk = display.agent_streaming_chunk

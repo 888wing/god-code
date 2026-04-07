@@ -73,6 +73,11 @@ class TestMultiAgentFlow:
             dispatcher=dispatcher,
         )
         engine.allowed_tools = {"read_file"}
+        # v1.0.1/T2: this test verifies the planner flow itself, not the
+        # lazy heuristic — disable lazy so "Inspect the player script"
+        # always triggers a planner pass regardless of the heuristic's
+        # read-only classification.
+        engine.planner_lazy = False
 
         result = await engine.submit("Inspect the player script")
 
