@@ -495,6 +495,159 @@ def test_engine_has_check_health():
     assert hasattr(ConversationEngine, '_check_auto_health')
 
 
+class TestChatLoopCancellation:
+    """Regression v1.0.1/D1: the chat loop must cancel the running
+    submit task cleanly on Ctrl+C, terminating any spawned subprocesses
+    and rolling back the turn's message state.
+
+    This is the full completion of v1.0.0/C2 which only shipped the
+    message-state rollback — the actual asyncio.Task cancellation and
+    subprocess termination were deferred to v1.0.1.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cleanup_helper_runs_rollback_and_terminate(self):
+        """The shared cleanup helper calls rollback_current_turn and
+        terminate_active_subprocesses on the engine. Tests the cleanup
+        path in isolation without needing to simulate a real Ctrl+C
+        (raising KeyboardInterrupt inside an asyncio task trips over
+        pytest-asyncio's BaseException handling)."""
+        from godot_agent.cli.commands import _cleanup_after_cancel
+
+        class CleanupEngine:
+            def __init__(self):
+                self.rolled_back = False
+                self.terminated = False
+
+            def rollback_current_turn(self):
+                self.rolled_back = True
+                return 1
+
+            async def terminate_active_subprocesses(self):
+                self.terminated = True
+                return 0
+
+        engine = CleanupEngine()
+        await _cleanup_after_cancel(engine)
+
+        assert engine.rolled_back is True
+        assert engine.terminated is True
+
+    @pytest.mark.asyncio
+    async def test_cleanup_helper_defensive_for_fake_engine(self):
+        """FakeEngine (CLI test double) doesn't implement
+        terminate_active_subprocesses or rollback_current_turn. The
+        cleanup helper must not crash."""
+        from godot_agent.cli.commands import _cleanup_after_cancel
+
+        class MinimalEngine:
+            pass
+
+        engine = MinimalEngine()
+        await _cleanup_after_cancel(engine)  # Must not raise
+
+    @pytest.mark.asyncio
+    async def test_submit_cancellable_runs_cleanup_on_cancelled_error(self):
+        """Same as above but with asyncio.CancelledError instead of
+        KeyboardInterrupt — both must trigger the cleanup path."""
+        from godot_agent.cli.commands import _submit_cancellable
+        import asyncio as _asyncio
+        from contextlib import contextmanager
+
+        class FakeDisplay:
+            def thinking(self):
+                @contextmanager
+                def _cm():
+                    yield
+                return _cm()
+
+            def agent_response(self, text):
+                pass
+
+            def info(self, msg):
+                pass
+
+        class CancelEngine:
+            def __init__(self):
+                self.use_streaming = False
+                self.on_stream_chunk = None
+                self.rolled_back = False
+                self.terminated = False
+
+            async def submit(self, user_input):
+                raise _asyncio.CancelledError()
+
+            def rollback_current_turn(self):
+                self.rolled_back = True
+                return 1
+
+            async def terminate_active_subprocesses(self):
+                self.terminated = True
+                return 0
+
+        engine = CancelEngine()
+        display = FakeDisplay()
+
+        class Cfg:
+            streaming = False
+
+        from godot_agent.cli.commands import TurnCancelled
+        with pytest.raises(TurnCancelled):
+            await _submit_cancellable(engine, "hi", Cfg(), display)
+
+        assert engine.rolled_back is True
+        assert engine.terminated is True
+
+    @pytest.mark.asyncio
+    async def test_submit_cancellable_returns_response_on_success(self):
+        """Happy path: when submit completes naturally, the helper
+        returns the response string without any cleanup."""
+        from godot_agent.cli.commands import _submit_cancellable
+
+        class FakeDisplay:
+            def thinking(self):
+                from contextlib import contextmanager
+                @contextmanager
+                def _cm():
+                    yield
+                return _cm()
+
+            def agent_response(self, text):
+                self.last_response = text
+
+            def info(self, msg):
+                pass
+
+        class GoodEngine:
+            use_streaming = False
+            on_stream_chunk = None
+            rolled_back = False
+            terminated = False
+
+            async def submit(self, user_input):
+                return f"reply to {user_input}"
+
+            def rollback_current_turn(self):
+                self.rolled_back = True
+                return 0
+
+            async def terminate_active_subprocesses(self):
+                self.terminated = True
+                return 0
+
+        engine = GoodEngine()
+        display = FakeDisplay()
+
+        class Cfg:
+            streaming = False
+
+        response = await _submit_cancellable(engine, "hi", Cfg(), display)
+        assert response == "reply to hi"
+        # No cleanup on the success path
+        assert engine.rolled_back is False
+        assert engine.terminated is False
+
+
 class TestSubprocessRegistry:
     """Regression v1.0.1/D2: subprocess registry lets the engine terminate
     any tool-spawned subprocess (godot validate, screenshot capture,

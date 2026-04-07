@@ -283,11 +283,23 @@ def test_chat_cd_switches_to_non_project_dir_without_crashing(monkeypatch, tmp_p
 
 
 def test_chat_keyboard_interrupt_does_not_end_session(monkeypatch, tmp_path: Path) -> None:
+    """Regression v1.0.0/C2 → v1.0.1/D1: Ctrl+C mid-turn cancels cleanly
+    and the session continues to the next prompt.
+
+    The effect uses asyncio.CancelledError rather than KeyboardInterrupt
+    because v1.0.1 wraps engine.submit() in asyncio.create_task (for
+    subprocess termination + true task cancellation). KeyboardInterrupt
+    raised from inside a task trips asyncio's BaseException handling
+    and aborts the event loop; real Ctrl+C in the CLI interrupts the
+    outer await chain and is converted to CancelledError by the
+    asyncio.create_task wrapper, matching this simulation.
+    """
+    import asyncio
     project_root = _project(tmp_path / "project")
     config_path = tmp_path / "config.json"
     cfg = _config()
 
-    build_engine, created = build_engine_factory([[KeyboardInterrupt(), "Recovered"]])
+    build_engine, created = build_engine_factory([[asyncio.CancelledError(), "Recovered"]])
     monkeypatch.setattr("godot_agent.cli._check_update", lambda: None)
     monkeypatch.setattr("godot_agent.cli._load_or_setup_config", lambda path: cfg.model_copy(deep=True))
     monkeypatch.setattr("godot_agent.cli.build_engine", build_engine)

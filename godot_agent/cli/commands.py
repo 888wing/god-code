@@ -537,6 +537,76 @@ def ask(prompt: str, project: str, config: str | None, image: tuple[str, ...], p
         click.echo(result)
 
 
+class TurnCancelled(Exception):
+    """Raised by :func:`_submit_cancellable` when the user cancels mid-turn.
+
+    Used as an internal signal between the helper and the chat loop so
+    pytest-asyncio can catch cancellation via ``pytest.raises`` without
+    tripping over KeyboardInterrupt / CancelledError's special handling
+    inside an event loop. The chat loop translates this back into a
+    "Cancelled" message and continues the session.
+    """
+
+
+async def _cleanup_after_cancel(engine) -> None:
+    """Shared cleanup for the cancellation path.
+
+    Calls ``engine.terminate_active_subprocesses()`` (v1.0.1/D2) to
+    SIGTERM + SIGKILL any in-flight subprocesses, then
+    ``engine.rollback_current_turn()`` (v1.0.0/C2) to drop any messages
+    appended during the cancelled turn. Both are guarded with hasattr
+    for FakeEngine compatibility.
+    """
+    if hasattr(engine, "terminate_active_subprocesses"):
+        try:
+            await engine.terminate_active_subprocesses()
+        except Exception:
+            pass
+    if hasattr(engine, "rollback_current_turn"):
+        try:
+            engine.rollback_current_turn()
+        except Exception:
+            pass
+
+
+async def _submit_cancellable(engine, user_input: str, cfg, display) -> str:
+    """Submit a user input as a cancellable asyncio task.
+
+    Wraps ``engine.submit()`` in ``asyncio.create_task`` so that a
+    KeyboardInterrupt (Ctrl+C) during the await can cancel the task,
+    terminate any tool-spawned subprocesses, and roll back the turn's
+    message state — completing the v1.0.0/C2 partial fix with the full
+    cancellation architecture planned in v1.0.1/D1.
+
+    On success: returns the assistant response string.
+
+    On KeyboardInterrupt / CancelledError: cancels the task, awaits it
+    to drain, runs cleanup via ``_cleanup_after_cancel``, then raises
+    ``TurnCancelled`` so the chat loop can catch it and continue the
+    session. Uses a custom exception type (not KeyboardInterrupt) to
+    avoid pytest-asyncio / event loop special handling of BaseException.
+    """
+    submit_task = asyncio.create_task(engine.submit(user_input))
+    try:
+        if cfg.streaming and engine.on_stream_chunk:
+            return await submit_task
+        else:
+            with display.thinking():
+                result = await submit_task
+            display.agent_response(result)
+            return result
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        submit_task.cancel()
+        try:
+            await submit_task
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            pass
+        except Exception:
+            pass
+        await _cleanup_after_cancel(engine)
+        raise TurnCancelled()
+
+
 @main.command()
 @click.option("--project", "-p", default=".", help="Path to Godot project root")
 @click.option("--config", "-c", default=None, help="Path to config file")
@@ -1775,21 +1845,24 @@ def chat(project: str = ".", config: str | None = None):
                         await _edit_intent_profile(checkpoint=True)
                         engine.refresh_intent_profile(user_input)
                         _refresh_workspace()
-                    # v1.0.0/C2: submit returns naturally for both streaming
-                    # and non-streaming paths. KeyboardInterrupt is propagated
-                    # at the next await point and caught below — combined with
-                    # rollback_current_turn(), this ensures cancelled turns
-                    # don't pollute the message history of the next turn.
-                    if cfg.streaming and engine.on_stream_chunk:
-                        response = await engine.submit(user_input)
-                    else:
-                        with display.thinking():
-                            response = await engine.submit(user_input)
-                        display.agent_response(response)
-                except KeyboardInterrupt:
+                    # v1.0.1/D1: fully-cancellable submit. Wraps
+                    # engine.submit() in asyncio.create_task so Ctrl+C
+                    # can cancel the task, terminate any spawned
+                    # subprocesses, and roll back the turn's message
+                    # state (completes v1.0.0/C2). See
+                    # _submit_cancellable docstring for details.
+                    response = await _submit_cancellable(
+                        engine, user_input, cfg, display
+                    )
+                except (KeyboardInterrupt, TurnCancelled):
                     display.info("Cancelled")
-                    if hasattr(engine, "rollback_current_turn"):
-                        engine.rollback_current_turn()
+                    # _submit_cancellable already ran cleanup via
+                    # _cleanup_after_cancel, but if the exception was a
+                    # raw KeyboardInterrupt (e.g. during the
+                    # refresh_intent_profile or _edit_intent_profile
+                    # phase before submit started), run cleanup
+                    # defensively to ensure no partial state leaks.
+                    await _cleanup_after_cancel(engine)
                     continue
                 except httpx.HTTPStatusError as e:
                     status_code = e.response.status_code if e.response is not None else "?"
