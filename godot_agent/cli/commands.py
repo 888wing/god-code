@@ -905,6 +905,17 @@ def chat(project: str = ".", config: str | None = None):
         return await _apply_setting_value("api_key", entered_value, prompt_for_auth=False)
 
     async def _apply_setting_value(key: str, value: str, *, prompt_for_auth: bool = True) -> bool:
+        # v1.0.1: short aliases for the routing-related backend_* settings
+        # so users can type `/set cost_preference quality` instead of
+        # `/set backend_cost_preference quality`. Mapping is defined here
+        # rather than on AgentConfig because the underlying field name is
+        # historical and we don't want to break stored configs.
+        SETTING_ALIASES = {
+            "cost_preference": "backend_cost_preference",
+            "force_provider": "backend_force_provider",
+            "force_model": "backend_force_model",
+        }
+        key = SETTING_ALIASES.get(key, key)
         if not hasattr(cfg, key):
             display.error(f"Unknown setting: {key}")
             return False
@@ -978,6 +989,12 @@ def chat(project: str = ".", config: str | None = None):
             "oauth_token",
             "max_tokens",
             "temperature",
+            # v1.0.1: backend routing settings must trigger engine rebuild
+            # so the new LLMConfig (carrying backend_cost_preference etc)
+            # flows through into the next submit() call.
+            "backend_cost_preference",
+            "backend_force_provider",
+            "backend_force_model",
         }:
             await _replace_engine(project_root, preserve_messages=True, rescan_project=False)
             display.info("Engine rebuilt with updated settings")

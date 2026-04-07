@@ -151,6 +151,75 @@ def test_handle_plan_pruned_event_logs_drop_count():
     assert "1" in log_text
 
 
+def test_handle_backend_warning_quality_gate_retry():
+    """Regression v1.0.1: backend_warning event with quality_gate_retry
+    code shows the user the cheap model failed validation and the
+    backend retried with a fallback (gpt-5.4-mini)."""
+    display = ChatDisplay(console=Console(record=True))
+    display.handle_event(
+        EngineEvent(
+            kind="backend_warning",
+            message="Cheap model output failed validation; retried with gpt-5.4-mini",
+            data={
+                "code": "quality_gate_retry",
+                "warning_data": {
+                    "reason": "missing '## Plan' header",
+                    "retried_with": "openai/gpt-5.4-mini",
+                },
+            },
+        )
+    )
+    log_text = " ".join(display.activity_log)
+    assert "routing" in log_text.lower()
+    assert "gpt-5.4-mini" in log_text or "validation" in log_text.lower()
+
+
+def test_handle_backend_warning_blacklist_triggered():
+    """Regression v1.0.1: backend_warning with cheap_routing_blacklist_triggered
+    code shows a strong notification with opt-out instructions."""
+    display = ChatDisplay(console=Console(record=True))
+    display.handle_event(
+        EngineEvent(
+            kind="backend_warning",
+            message="Repeated quality failures on worker (3 in 24h). Cheap routing disabled.",
+            data={
+                "code": "cheap_routing_blacklist_triggered",
+                "warning_data": {
+                    "role": "worker",
+                    "failure_count": 3,
+                    "until": "2026-04-08T19:48:00Z",
+                },
+            },
+        )
+    )
+    log_text = " ".join(display.activity_log)
+    assert "blacklist" in log_text.lower() or "disabled" in log_text.lower()
+
+
+def test_handle_backend_warning_cheap_routing_disabled():
+    """Regression v1.0.1: backend_warning with cheap_routing_disabled
+    indicates an already-active blacklist routed this request."""
+    display = ChatDisplay(console=Console(record=True))
+    display.handle_event(
+        EngineEvent(
+            kind="backend_warning",
+            message="Cheap routing temporarily disabled for worker. Auto-routed to openai/gpt-5.4-mini.",
+            data={
+                "code": "cheap_routing_disabled",
+                "warning_data": {
+                    "role": "worker",
+                    "until": "2026-04-08T19:48:00Z",
+                    "reason": "previous quality gate failures",
+                    "fallback_provider": "openai",
+                    "fallback_model": "gpt-5.4-mini",
+                },
+            },
+        )
+    )
+    log_text = " ".join(display.activity_log)
+    assert "routing" in log_text.lower() or "disabled" in log_text.lower()
+
+
 def test_handle_planner_skipped_event_logs_reason():
     """Regression v1.0.1/T2: planner_skipped event must show the reason
     so users understand why a turn skipped the planner pass."""

@@ -130,6 +130,12 @@ class Message:
 class ChatResponse:
     message: Message
     usage: TokenUsage
+    # v1.0.1: backend may surface warnings (e.g. quality_gate_retry,
+    # cheap_routing_disabled, cheap_routing_blacklist_triggered) alongside
+    # the normal response. The CLI's chat loop forwards these to the TUI
+    # via display.handle_event as backend_warning events so users can see
+    # why the backend fell back to a different model.
+    warnings: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -165,6 +171,14 @@ class LLMConfig:
     backend_url: str = ""
     backend_api_key: str = ""
     backend_provider_keys: dict[str, str] = field(default_factory=dict)
+    # v1.0.1: cost preference propagated from AgentConfig.backend_cost_preference
+    # Sent to backend as RouteContext.cost_preference. Values:
+    #   "economy"  → GLM-5, no quality gate fallback
+    #   "balanced" → GLM-5 + quality gate fallback to gpt-5.4-mini (default)
+    #   "quality"  → flagship gpt-5.4 / claude-sonnet (opt-in)
+    backend_cost_preference: str = "balanced"
+    backend_force_provider: str = ""
+    backend_force_model: str = ""
 
 
 def _pricing_for_model(model: str) -> tuple[float, float]:

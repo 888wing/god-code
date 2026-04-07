@@ -182,7 +182,10 @@ class LLMClient:
                 routing.get("latency_ms", 0),
             )
 
-        return ChatResponse(message=msg, usage=usage)
+        # v1.0.1: capture backend warnings (quality_gate_retry, cheap_routing_disabled,
+        # cheap_routing_blacklist_triggered) so the TUI can surface them.
+        warnings = data.get("warnings")
+        return ChatResponse(message=msg, usage=usage, warnings=warnings)
 
     async def computer_use(
         self,

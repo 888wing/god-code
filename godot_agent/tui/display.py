@@ -865,6 +865,39 @@ class ChatDisplay:
             # turn was faster than expected.
             reason = event.data.get("reason", "unknown")
             self.add_activity(f"planner: skipped ({reason})")
+        elif event.kind == "backend_warning":
+            # v1.0.1: surface backend warnings about cost routing decisions.
+            # Specific known codes get tailored phrasing; others fall through
+            # to the raw message.
+            code = event.data.get("code", "")
+            message = event.message or ""
+            if code == "quality_gate_retry":
+                # Cheap model output failed validation, fell back to gpt-5.4-mini
+                self.add_activity(f"routing: {message}")
+                self.console.print(
+                    f"  [yellow]ℹ routing fallback:[/] {message}"
+                )
+            elif code == "cheap_routing_disabled":
+                # Active blacklist auto-routed this request
+                until = event.data.get("warning_data", {}).get("until", "")
+                self.add_activity(
+                    f"routing: cheap routing disabled until {until}"
+                )
+                self.console.print(
+                    f"  [yellow]ℹ routing override:[/] {message}"
+                )
+            elif code == "cheap_routing_blacklist_triggered":
+                # Just triggered — strong notification
+                self.add_activity(f"routing: blacklist triggered ({message})")
+                self.console.print(
+                    f"  [red]⚠ cheap routing disabled:[/] {message}"
+                )
+                self.console.print(
+                    "  [dim]Use [bold]/set cost_preference quality[/bold] "
+                    "to override and use flagship models.[/]"
+                )
+            else:
+                self.add_activity(f"backend: {message}")
         elif event.kind == "context_compacted":
             self.add_activity(event.message)
         elif event.kind == "intent_inferred":

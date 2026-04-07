@@ -236,6 +236,91 @@ class TestLLMClient:
         assert "Authorization" not in headers
         await client.close()
 
+    @pytest.mark.asyncio
+    async def test_backend_response_warnings_attached_to_chat_response(self):
+        """Regression v1.0.1/D3-routing: backend OrchestrateResponse may
+        include `warnings` (e.g. quality_gate_retry, cheap_routing_disabled,
+        cheap_routing_blacklist_triggered). The CLI must capture them on
+        ChatResponse so display.handle_event can surface them to the user.
+        """
+        config = LLMConfig(
+            api_key="sk-test",
+            backend_url="https://api.god-code.dev",
+            backend_api_key="gc-platform-key",
+        )
+        client = LLMClient(config)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [
+                {"message": {"role": "assistant", "content": "Plan ready"}}
+            ],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150,
+            },
+            "warnings": [
+                {
+                    "code": "quality_gate_retry",
+                    "message": "Cheap model output failed validation; retried with gpt-5.4-mini",
+                    "data": {
+                        "reason": "missing '## Plan' header",
+                        "retried_with": "openai/gpt-5.4-mini",
+                    },
+                },
+            ],
+        }
+        client._http.post = AsyncMock(return_value=mock_response)
+
+        resp = await client._chat_via_backend(
+            [Message.user("plan it")],
+            None,
+            {"intent": "test"},
+        )
+
+        assert resp.warnings is not None
+        assert len(resp.warnings) == 1
+        assert resp.warnings[0]["code"] == "quality_gate_retry"
+        assert "gpt-5.4-mini" in resp.warnings[0]["message"]
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_backend_response_no_warnings_field_yields_none(self):
+        """When backend doesn't include warnings (legacy backend or no
+        warnings to surface), ChatResponse.warnings is None — not an
+        empty list — so callers can do `if response.warnings:` cleanly.
+        """
+        config = LLMConfig(
+            api_key="sk-test",
+            backend_url="https://api.god-code.dev",
+            backend_api_key="gc-platform-key",
+        )
+        client = LLMClient(config)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            },
+        }
+        client._http.post = AsyncMock(return_value=mock_response)
+
+        resp = await client._chat_via_backend(
+            [Message.user("hi")],
+            None,
+            {"intent": "test"},
+        )
+        assert resp.warnings is None
+        await client.close()
+
     def test_build_computer_use_request(self):
         client = LLMClient(
             LLMConfig(

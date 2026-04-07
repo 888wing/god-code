@@ -270,6 +270,11 @@ def build_engine(config: AgentConfig, project_root: Path) -> ConversationEngine:
         backend_url=config.backend_url,
         backend_api_key=config.backend_api_key,
         backend_provider_keys=config.backend_provider_keys,
+        # v1.0.1: propagate cost preference + force overrides so the
+        # backend routing engine sees them in RouteContext.
+        backend_cost_preference=config.backend_cost_preference,
+        backend_force_provider=config.backend_force_provider,
+        backend_force_model=config.backend_force_model,
     )
     client = LLMClient(llm_config)
     registry = build_registry()

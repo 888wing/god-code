@@ -714,6 +714,22 @@ class ConversationEngine:
         self.session_usage = self.session_usage + chat_resp.usage
         self.session_api_calls += 1
         self.messages.append(chat_resp.message)
+
+        # v1.0.1: forward backend warnings (quality_gate_retry,
+        # cheap_routing_disabled, cheap_routing_blacklist_triggered) to
+        # the TUI as backend_warning events. The display.handle_event
+        # path renders them in the activity log so users see why the
+        # backend just used a different model than expected.
+        warnings = getattr(chat_resp, "warnings", None) or []
+        for warning in warnings:
+            if isinstance(warning, dict) and warning.get("code"):
+                self._emit_event(
+                    "backend_warning",
+                    warning.get("message", ""),
+                    code=warning.get("code", ""),
+                    warning_data=warning.get("data", {}),
+                )
+
         return chat_resp.message, stream_active
 
     async def _execute_pending_tools(self, response: Message, turn: TurnStats) -> tuple[set[str], set[str]]:
