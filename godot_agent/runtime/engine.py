@@ -1001,9 +1001,15 @@ class ConversationEngine:
             self.last_impact_report = analyze_change_impact(Path(self.project_path), set(self.changeset.read_files) or {str(Path(self.project_path) / "project.godot")})
         planner_result = await self.dispatcher.run_planner(user_input)
         self.last_plan = planner_result.content
+        # v1.0.1/T3: inject only the actionable subset (Goal + Steps) into
+        # main history. The full plan with Risks/Validation is already
+        # streamed to the user via the planner sub-engine's TUI output;
+        # injecting it again here just wastes tokens on every rebill.
+        from godot_agent.agents.dispatcher import extract_worker_plan
+        reduced_plan = extract_worker_plan(planner_result.content)
         self.messages.append(
             Message.user(
-                f"[SYSTEM] Planner pass before implementation:\n{planner_result.content}\n"
+                f"[SYSTEM] Planner pass before implementation:\n{reduced_plan}\n"
                 "Follow this plan unless direct inspection or validation proves it wrong."
             )
         )

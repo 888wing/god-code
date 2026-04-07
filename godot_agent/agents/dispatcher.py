@@ -2,9 +2,56 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
+
+
+def extract_worker_plan(plan_text: str) -> str:
+    """Reduce a full planner output to just the actionable subset.
+
+    The planner prompt (v1.0.0/F2) enforces a 5-section markdown format:
+    Goal / Scope / Steps / Risks / Validation. The worker sub-agent and
+    the main engine only need Goal + Steps to execute correctly — Scope,
+    Risks, and Validation are user-facing context that the TUI already
+    shows separately. Injecting them into main history wastes tokens on
+    every subsequent LLM call (v1.0.1/T3).
+
+    Returns the reduced plan. Defensive fallback: if the markdown can't
+    be parsed (malformed LLM output), returns the input unchanged — we
+    never want the worker to lose its plan entirely because of a parser
+    mismatch.
+
+    Empty input returns empty string.
+    """
+    if not plan_text:
+        return ""
+
+    # Try to find the **Goal**: and **Steps**: sections. If either is
+    # missing, we're dealing with malformed output — fall back to the
+    # full text.
+    goal_match = re.search(
+        r"\*\*Goal\*\*\s*:\s*(.+?)(?=\n\s*\*\*|$)",
+        plan_text,
+        re.DOTALL,
+    )
+    steps_match = re.search(
+        r"\*\*Steps\*\*\s*:\s*\n(.+?)(?=\n\s*\*\*(?:Risks|Validation)\*\*|$)",
+        plan_text,
+        re.DOTALL,
+    )
+    if not goal_match or not steps_match:
+        return plan_text  # defensive fallback
+
+    goal = goal_match.group(1).strip()
+    steps = steps_match.group(1).strip()
+
+    return (
+        "## Plan\n\n"
+        f"**Goal**: {goal}\n\n"
+        f"**Steps**:\n{steps}\n"
+    )
 
 from godot_agent.godot.impact_analysis import format_impact_report, infer_request_impact
 from godot_agent.agents.configs import AGENT_CONFIGS, AgentConfig
