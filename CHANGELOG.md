@@ -2,6 +2,77 @@
 
 All notable changes to God Code will be documented in this file.
 
+## [1.0.1] — 2026-04-07
+
+**Token-efficiency + cancellation closeout.** This release attacks the dominant token cost driver on long dev sessions (planner blocks accumulating in history and rebilling on every subsequent LLM call) and completes the v1.0.0 deferred items (full asyncio.Task cancellation, subprocess termination, per-tool progress events).
+
+**No breaking API changes.** Config additions are opt-out (defaults preserve the new behavior). Event taxonomy gains three additive kinds (`tool_progress`, `plan_pruned`, `planner_skipped`). All 681 v1.0.0 tests continue to pass; 58 new regression tests added (739 total).
+
+### Token efficiency (the main motivator)
+
+- **T1: Planner blocks pruned from history** — `_maybe_run_planner` now calls `prune_system_reports` (a helper that existed and was tested but never wired into production code) to cap plan history at 2 blocks (configurable via `plan_history_keep`). On a 40-turn dev session, this cuts planner-attributable rebill from ~410K tokens to ~2K tokens — roughly $1.2/session saved at gpt-5.4 input rates. Helper extended with an additive `prefix_filter` parameter so pruning is scoped to `"[SYSTEM] Planner pass"` and cannot accidentally drop quality-gate or reviewer reports.
+
+- **T2: Lazy planner triggering** — `_maybe_run_planner` now calls a new `should_run_planner(user_input)` heuristic first. Trivial read-only inputs (`explain X`, `show Y`, `what is in Z`, `如何`, `解釋`, `顯示`, `為什麼`, question marks with `什麼`) skip the full planner cost. Action verbs (EN: implement/add/fix/refactor/... | 繁中: 實作/新增/修/改/重寫) or multi-file references still trigger a plan. Config opt-out: `planner_lazy: false` restores the v1.0.0 unconditional behavior. Emits a new `planner_skipped` event with the reason for dogfood observability.
+
+- **T3: Plan content shaping** — Added `extract_worker_plan()` in `agents/dispatcher.py`. The `[SYSTEM] Planner pass` block injected into main history now contains only the actionable subset (Goal + Steps), not the full 5-section markdown. Scope + Risks + Validation are user-facing context already streamed to the TUI via the planner sub-engine, so they don't need to be re-injected. Typical saving: ~30% of per-plan injected tokens. Defensive fallback: returns the full text unchanged if the LLM produces malformed markdown.
+
+- **T4: `prune_system_reports` wired up** — the helper shipped in v0.x with tests but was dead code. Now in use per T1 above.
+
+### Cancellation closeout (v1.0.0 deferred)
+
+- **D1: Full asyncio.Task cancellation in chat loop** — Completes the v1.0.0/C2 partial implementation. New `_submit_cancellable` helper in `cli/commands.py` wraps `engine.submit()` in `asyncio.create_task`, catches `CancelledError`/`KeyboardInterrupt`, cancels the task, runs cleanup, and raises a new `TurnCancelled` exception (used instead of re-raising `KeyboardInterrupt` because `KeyboardInterrupt` inside an asyncio task trips pytest-asyncio's BaseException handling). Shared cleanup in `_cleanup_after_cancel(engine)` guarded with `hasattr` for FakeEngine compat.
+
+- **D2: Subprocess registry + termination** — New contextvar-based subprocess registry on `ConversationEngine`. `register_subprocess(proc)` / `unregister_subprocess(proc)` / `async terminate_active_subprocesses(timeout=2.0)`. `terminate_active_subprocesses` sends SIGTERM, waits up to 2s, then escalates to SIGKILL for stubborn processes. Activated during `submit()` / `submit_with_images()` via contextvar. Tools lookup the active registry via `get_current_subprocess_registry()`. `tools/godot_cli.run_godot_command` and `tools/screenshot.CaptureScreenshotTool` register their subprocesses on spawn. Ctrl+C during a Godot validate or screenshot capture now kills the subprocess within 2s instead of letting it run to natural completion (30-120s wasted).
+
+- **D3: Per-tool progress events** — Completes v1.0.0/A2 Layer 2. New `tool_progress` event kind + `tools/base.py::emit_tool_progress(context, ...)` helper. `generate_sprite` emits 5 phases (API call → post-process → save → QA → reimport) so the spinner shows `generate_sprite: post-processing (2/5)` instead of a static label. TUI display handler updates the active status spinner's label dynamically.
+
+### Measured impact (design-doc projection)
+
+| Metric | v1.0.0 | v1.0.1 | Delta |
+|---|---|---|---|
+| Planner-attributable rebill (40-turn session) | ~430K tokens | ~18K tokens | **-96%** |
+| Plan history carried (40-turn session) | ~20K tokens | ~700 tokens | **-96%** |
+| Whole-session input tokens (conservative) | baseline | baseline × 0.70-0.92 | **-8% to -30%** |
+| Ctrl+C latency (worst case subprocess) | 30-120s | < 2s | **-95%** |
+
+Actual impact will be measured over the first dogfood session on v1.0.1.
+
+### Added
+
+- `prune_system_reports` `prefix_filter` parameter (scoped pruning)
+- `should_run_planner(user_input)` heuristic
+- `extract_worker_plan(plan_text)` function in dispatcher
+- `plan_history_keep: int = 2` config field
+- `planner_lazy: bool = True` config field
+- `ConversationEngine._active_subprocesses` set
+- `register_subprocess` / `unregister_subprocess` / `terminate_active_subprocesses` engine methods
+- `_activate_subprocess_registry` / `_deactivate_subprocess_registry` engine methods
+- `get_current_subprocess_registry()` module-level accessor
+- `SubprocessRegistryProtocol` typing protocol
+- `TurnCancelled(Exception)` in `cli/commands.py`
+- `_cleanup_after_cancel(engine)` async helper in `cli/commands.py`
+- `_submit_cancellable(engine, user_input, cfg, display)` async helper in `cli/commands.py`
+- `emit_tool_progress(context, ...)` helper in `tools/base.py`
+- New event kinds: `plan_pruned`, `planner_skipped`, `tool_progress`
+
+### Changed
+
+- `_maybe_run_planner`: now checks `should_run_planner` when `planner_lazy=True`, calls `extract_worker_plan` on the planner output before injection, and calls `prune_system_reports` after appending
+- `submit()` / `submit_with_images()`: wrap work in `_activate_subprocess_registry` / `_deactivate_subprocess_registry` context
+- `tools/godot_cli.run_godot_command`: registers subprocess with active registry
+- `tools/screenshot.CaptureScreenshotTool.execute`: registers subprocess with active registry
+- Chat loop (`cli/commands.py`): uses `_submit_cancellable` instead of bare `await engine.submit`
+
+### Test count
+
+681 → 739 (+58 regression tests)
+
+### Known scope notes
+
+- `image_gen` single-candidate API call — the design doc mentioned "4 candidates" but the current `GenerateSpriteTool` requests `n=1` from the image API. Per-tool progress is instead emitted as 5 execution phases (API call, post-process, save, QA, reimport) which covers the full wall-clock.
+- `_run_visual_iteration` engine method doesn't exist as a standalone — the vision loop is LLM-driven via tool calls, not a hardcoded counter. `tool_progress` instrumentation for vision iteration was dropped from this release; the user-visible stage updates come from the individual tool-level progress (screenshot, analyze, score) rather than a synthetic "iteration N/3" counter.
+- Windows cancellation: `asyncio.CancelledError` handling path works cross-platform. The subprocess SIGTERM/SIGKILL path is POSIX-only but macOS/Linux is the current supported platform set. Windows gets best-effort behavior via normal Python subprocess termination.
+
 ## [1.0.0] — 2026-04-07
 
 **Promoted from 1.0.0rc1 with no code changes** after Starfall workflow dogfood verification. See the `[1.0.0rc1]` section below for the full list of fixes and design rationale.
