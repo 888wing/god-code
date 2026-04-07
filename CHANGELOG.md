@@ -2,6 +2,12 @@
 
 All notable changes to God Code will be documented in this file.
 
+## [1.0.0] — 2026-04-07
+
+**Promoted from 1.0.0rc1 with no code changes** after Starfall workflow dogfood verification. See the `[1.0.0rc1]` section below for the full list of fixes and design rationale.
+
+This is the first stable v1.x release of god-code.
+
 ## [1.0.0rc1] — 2026-04-07
 
 **v1.0 is the first release where god-code is comfortable to use day-to-day without needing to know its quirks.** This is a coordinated UX overhaul. No new features, no breaking API changes — every change makes the existing tool feel less broken in everyday use.
