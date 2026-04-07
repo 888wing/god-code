@@ -244,6 +244,27 @@ def _check_update(verbose: bool = False) -> None:
 
 def _run_setup_wizard(config_path: Path | None = None) -> None:
     """Interactive first-run setup wizard."""
+    # v1.0.0/D1: refuse to silently overwrite an existing config. The
+    # previous behaviour clobbered API keys with no warning if a user
+    # ran `god-code setup` from habit on an already-configured machine.
+    target_path = config_path or default_config_path()
+    if target_path.exists():
+        click.echo()
+        click.secho(f"  Config already exists at {target_path}", fg="yellow")
+        try:
+            existing = json.loads(target_path.read_text())
+            click.echo(f"  Current provider: {existing.get('provider', '?')}")
+            click.echo(f"  Current model:    {existing.get('model', '?')}")
+            if existing.get("api_key"):
+                masked = existing["api_key"][:4] + "…" + existing["api_key"][-4:] if len(existing["api_key"]) > 8 else "set"
+                click.echo(f"  Current api_key:  {masked}")
+        except Exception:
+            pass
+        click.echo()
+        if not click.confirm("  Overwrite this config?", default=False):
+            click.secho("  Setup cancelled. Existing config preserved.", fg="green")
+            return
+
     click.echo()
     click.secho("  God Code — AI Agent for Godot Development", fg="cyan", bold=True)
     click.echo()
@@ -331,7 +352,15 @@ def _run_setup_wizard(config_path: Path | None = None) -> None:
         config_data["godot_path"] = godot_path
         click.echo(f"  Godot found: {godot_path}")
     else:
-        click.echo("  Godot not found in PATH. Set 'godot_path' in config later.")
+        # v1.0.0/D2: previously this was a quiet single-line note that users
+        # missed. Without godot_path, run_godot / validation / screenshot tools
+        # silently fail at runtime later. Loud warning + actionable instructions.
+        click.echo()
+        click.secho("  ⚠ Godot executable NOT found in PATH or /Applications.", fg="yellow", bold=True)
+        click.echo("    Validation, screenshots, and run_godot tools will fail until you set:")
+        click.echo("      god-code chat → /set godot_path /full/path/to/godot")
+        click.echo("    or edit ~/.config/god-code/config.json directly.")
+        click.echo()
 
     # Save config
     config_path = config_path or default_config_path()
