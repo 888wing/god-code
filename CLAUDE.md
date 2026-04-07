@@ -24,11 +24,15 @@
 - **Build**: hatchling
 - **Install**: `pipx install -e .` (editable dev), `pipx install god-code` (release)
 
-## Current Version: 0.8.1
+## Current Version: 0.9.1
 
-**Stats**: 103 source files, 83 test files, ~20K lines, 620 tests, 41 tools.
+**Stats**: 103 source files, 83 test files, ~20K lines, 663 tests, 41 tools.
 
-**v0.8 additions**: Vision iteration loop (screenshot → analyze → fix → score), platform API key auth, live TCP bridge to running Godot, CLI package split, ImageChops perf, ValidationSuite.
+**v0.9 additions**: Server-side provider key pool for platform mode, upstream error redaction, pre-launch security hardening (shell/session/config/MCP/log paths), Hatch wheel exclude list, pydantic `dict[str,Any]` and `Any` support in OpenAI strict mode.
+
+**v0.9.1 patch**: Guard `assistant_preview` against empty LLM response (fixes planner-pass IndexError).
+
+> ⚠️ **This version number is drift-prone.** It must match `pyproject.toml`, `god-code-api`'s `wrangler.toml` `LATEST_VERSION`, the `/v1/version` endpoint response, and the `godcode.dev` hero-badge. See the release process below.
 
 ## Architecture
 
@@ -242,61 +246,158 @@ Rules:
 
 ```bash
 # god-code (Python)
-cd ~/projects/god-code
-.venv/bin/python -m pytest tests/ -v          # Full suite (620 tests)
+cd ~/Projects/god-code
+.venv/bin/python -m pytest tests/ -v          # Full suite (663 tests)
 .venv/bin/python -m pytest tests/tools/ -v    # Tool tests only
 .venv/bin/python -m pytest tests/runtime/ -v  # Runtime tests
 
 # god-code-api (TypeScript)
-cd ~/projects/god-code-api
-npx vitest run                                # Full suite (134 tests)
+cd ~/Projects/god-code-api
+npx vitest run                                # Full suite (152 tests)
 ```
 
 ## CRITICAL: Release Process (3-repo sync)
 
-Every release MUST update all 3 repos. Missing any step will cause version mismatch, stale landing page, or broken update notifications.
+### The Invariant
+
+> `pyproject.toml` version **==** `god-code-api` `/v1/version` `latest` field **==** `godcode.dev` hero-badge version
+
+If any one of these three drifts, users stop getting update prompts, or see stale branding, or both. **Every version bump is a release**, and every release MUST sync all three. There is no such thing as "just bump pyproject.toml for now".
+
+### Incident history (do not repeat)
+
+- **v0.8.2 → v0.9.0**: `LATEST_VERSION` was left at `"0.8.2"` in `wrangler.toml` when `0.9.0` shipped. Every 0.9.0 user's startup check returned "you're on the latest" for weeks, masking missed updates. Caught only during the `0.9.1` patch while investigating an unrelated planner crash.
+  - Root cause: Step 2 was skipped during a release.
+  - Fix: the pre-flight drift check below is now the first action of any release, AND the last action after release completes.
+
+### Pre-Flight: Detect version drift (run anytime)
+
+Before releasing — or whenever anyone is suspicious — run this one-liner:
+
+```bash
+LOCAL=$(grep -E '^version' ~/Projects/god-code/pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/') && \
+BACKEND=$(curl -s https://god-code-api.nano122090.workers.dev/v1/version | sed -E 's/.*"latest":"([^"]+)".*/\1/') && \
+printf '  pyproject.toml : %s\n  /v1/version    : %s\n' "$LOCAL" "$BACKEND" && \
+if [ "$LOCAL" = "$BACKEND" ]; then echo '  ✅ in sync'; else echo '  ❌ DRIFT — run release Step 2'; fi
+```
+
+Expected output when healthy:
+```
+  pyproject.toml : 0.9.1
+  /v1/version    : 0.9.1
+  ✅ in sync
+```
+
+Interpretation:
+- `LOCAL > BACKEND` → Step 2 was skipped on a previous release. Run Step 2 immediately.
+- `LOCAL < BACKEND` → someone bumped the backend without releasing the CLI. Investigate before acting.
+- Equal → healthy.
+
+Hero-badge on `godcode.dev` is harder to automate-check (it's rendered HTML) and drifts less dangerously (cosmetic, not functional), so it's verified manually in Step 3.
+
+### Release Steps
+
+**Rule**: Never push Step 1 without immediately following through on Step 2. If you cannot complete Step 2 in the same session (no Cloudflare auth, deploy failure, etc.), **revert the Step 1 version bump** rather than leave the system drifted.
 
 ```bash
 # ══════════════════════════════════════════════════════════════
+# STEP 0: Drift check (must be ✅ before starting)
+# ══════════════════════════════════════════════════════════════
+# Run the one-liner above. If it shows drift, FIX THAT FIRST
+# before introducing a new version — you are compounding a bug.
+
+# ══════════════════════════════════════════════════════════════
 # STEP 1: god-code — bump version (single source of truth)
 # ══════════════════════════════════════════════════════════════
-cd ~/projects/god-code
-# Edit pyproject.toml: version = "X.Y.Z"
-git commit -am "release: vX.Y.Z"
+cd ~/Projects/god-code
+# 1a. Edit pyproject.toml: version = "X.Y.Z"
+# 1b. Run full test suite — MUST pass before committing
+.venv/bin/python -m pytest tests/ -q
+# 1c. Commit + push
+git commit -am "release: vX.Y.Z — <one-line summary>"
 git push
 
 # ══════════════════════════════════════════════════════════════
 # STEP 2: god-code-api — update version endpoint + deploy
+# (NEVER SKIP — this is what triggers user update prompts)
 # ══════════════════════════════════════════════════════════════
-cd ~/projects/god-code-api
-# Edit wrangler.toml: LATEST_VERSION = "X.Y.Z"
-# Optional: UPDATE_MESSAGE = "vX.Y: new feature summary"
+cd ~/Projects/god-code-api
+# 2a. Edit wrangler.toml:
+#       LATEST_VERSION = "X.Y.Z"
+#       UPDATE_MESSAGE = "vX.Y.Z: <what changed, why user should upgrade>"
+#       (only touch MIN_SUPPORTED_VERSION for hard-break releases)
+# 2b. Run API tests — MUST pass before deploy
+npx vitest run
+# 2c. Deploy
 npx wrangler deploy
-git commit -am "chore: update LATEST_VERSION to X.Y.Z"
+# 2d. VERIFY the deploy actually took effect (don't trust wrangler output alone)
+curl -s https://god-code-api.nano122090.workers.dev/v1/version
+#     → must show "latest":"X.Y.Z". If it doesn't, the deploy
+#       failed silently or hit wrong environment — investigate
+#       before proceeding.
+# 2e. Commit + push
+git commit -am "chore: bump LATEST_VERSION to X.Y.Z"
 git push
 
 # ══════════════════════════════════════════════════════════════
-# STEP 3: god-code-site — sync landing page stats + deploy
+# STEP 3: god-code-site — sync landing page + deploy
+# (optional for patch releases, required for minor/major)
 # ══════════════════════════════════════════════════════════════
-cd ~/projects/god-code-site
-# Update in src/pages/index.astro:
-#   - hero-badge version: "vX.Y"
-#   - stats section: test count, tool count, lines of code
-#   - any new features in feature grid or terminal demo
-#   - pricing changes if applicable
-npx astro build && npx wrangler pages deploy dist --project-name god-code-site
+cd ~/Projects/god-code-site
+# 3a. Update in src/pages/index.astro:
+#       - hero-badge version: "vX.Y" (minor) or "vX.Y.Z" (if it shows full patch)
+#       - stats-row: test count, tool count, lines of code
+#             (run `wc -l` and `pytest --collect-only | tail` in god-code to refresh)
+#       - feature cards: if new capabilities added
+#       - terminal demo: if new tools showcased
+# 3b. Build + deploy
+npx astro build
+npx wrangler pages deploy dist --project-name god-code-site
+# 3c. VERIFY landing page rendered the new version
+curl -s https://godcode.dev | grep -oE 'v[0-9]+\.[0-9]+(\.[0-9]+)?' | head
+# 3d. Commit + push
 git commit -am "chore: sync landing page for vX.Y.Z"
 git push
+
+# ══════════════════════════════════════════════════════════════
+# STEP 4: Post-release drift check (MUST be ✅)
+# ══════════════════════════════════════════════════════════════
+# Rerun the Pre-Flight one-liner. All three must match X.Y.Z.
+# If any still show the old version, you are NOT done.
 ```
 
-**Why all 3 must sync:**
-- `god-code` pyproject.toml is the version source → CLI reads it via importlib.metadata
-- `god-code-api` wrangler.toml LATEST_VERSION → CLI checks on startup, shows update prompt
-- `god-code-site` landing page → public-facing, must reflect current version/stats/features
+### When is Step 3 optional?
 
-**Version sync**: `_VERSION` in `commands.py` reads from `importlib.metadata.version("god-code")` which reads `pyproject.toml`. No hardcoded version strings.
+Only for patch releases where:
+- `godcode.dev` hero-badge shows `vX.Y` (minor) rather than `vX.Y.Z` (full patch), AND
+- No stats (test/tool/line counts) have changed meaningfully, AND
+- No new features or tools to showcase.
 
-**Update notifications**: CLI checks `GET /v1/version` on startup. Backend returns `latest`, `min_supported`, `update_url`, `message`. Outdated users see yellow prompt; unsupported users see red warning.
+**Steps 1 and 2 are NEVER optional.**
+
+### Version sync mechanism (for debugging drift)
+
+- **Source of truth**: `pyproject.toml` `version` field. The CLI reads it via `importlib.metadata.version("god-code")` in `cli/commands.py`. There are no hardcoded version strings in CLI source — `grep -rn '0\.[0-9]\.[0-9]' godot_agent/` should not find the version literal.
+- **Backend notification**: CLI calls `GET /v1/version` on startup. Backend returns `{latest, min_supported, update_url, message}`. If `installed < latest`, user sees yellow "update available" prompt; if `installed < min_supported`, red "unsupported" warning.
+- **Landing page**: Purely cosmetic/marketing. Drift here is embarrassing but not functional.
+
+### When Claude Code is making the change
+
+If you (Claude Code) touch `pyproject.toml` `version` in this repo for any reason — fix, feature, chore, doesn't matter — **you are executing a release**. You MUST:
+
+1. Run the **pre-flight drift check** before touching the version (verify baseline is clean — if drift already exists, surface it to the user first and let them decide how to handle, do not silently cover it up by bumping on top).
+2. After bumping `pyproject.toml`:
+   - Run `pytest tests/ -q` — must pass.
+   - Commit + push `god-code`.
+3. Immediately update `~/Projects/god-code-api/wrangler.toml` `LATEST_VERSION` and `UPDATE_MESSAGE` to match.
+4. Run `npx vitest run` in `god-code-api` — must pass.
+5. Run `npx wrangler deploy`.
+6. `curl -s https://god-code-api.nano122090.workers.dev/v1/version` and verify it returns the new version. If it doesn't, stop and surface to user.
+7. Commit + push `god-code-api`.
+8. Run the **post-release drift check** and include its output in your completion report to the user.
+9. If `godcode.dev` hero-badge shows full patch version OR stats/features materially changed, also do Step 3 (`god-code-site`). Otherwise mention it was skipped and why.
+
+**Do not leave this repo with a version bump that has not been followed through in `god-code-api`.** If anything blocks Step 2 (no auth, deploy fails, tests fail), revert the `pyproject.toml` bump locally (don't push the revert — just don't push the bump) and ask the user how to proceed. Drift is worse than an aborted release.
 
 ## Three-Repo Architecture
 
