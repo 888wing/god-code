@@ -61,6 +61,26 @@ class TestConversationEngine:
         assert len(engine.messages) == 3
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("empty_content", ["", "   ", "\n\n\t", None])
+    async def test_empty_assistant_response_does_not_crash(self, empty_content):
+        """Regression: planner/assistant returning empty or whitespace-only content
+        with no tool_calls must not raise IndexError on assistant_preview extraction.
+
+        Previously engine._run_loop did `(content or "").strip().splitlines()[0][:120]`
+        which crashed when splitlines() produced an empty list, aborting the turn
+        mid-planner-pass.
+        """
+        mock_client = AsyncMock(spec=LLMClient)
+        mock_client.chat = AsyncMock(return_value=_resp(Message.assistant(content=empty_content)))
+        registry = ToolRegistry()
+        engine = ConversationEngine(client=mock_client, registry=registry, system_prompt="test")
+        # Must not raise IndexError
+        await engine.submit("Hi")
+        # Preview degrades gracefully to empty string instead of crashing
+        assert engine.last_turn is not None
+        assert engine.last_turn.assistant_preview == ""
+
+    @pytest.mark.asyncio
     async def test_tool_call_and_response(self):
         registry = ToolRegistry()
         registry.register(EchoTool())

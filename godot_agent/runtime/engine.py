@@ -785,7 +785,8 @@ class ConversationEngine:
                 state.pending_response = response
 
                 if not response.tool_calls:
-                    turn.assistant_preview = (response.content or "").strip().splitlines()[0][:120]
+                    stripped_content = (response.content or "").strip()
+                    turn.assistant_preview = stripped_content.splitlines()[0][:120] if stripped_content else ""
                     self.last_response = response.content or ""
                     if stream_active:
                         if self.on_stream_end:
