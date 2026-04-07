@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import enum
 import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from godot_agent.godot.impact_analysis import ImpactAnalysisReport, analyze_change_impact
 from godot_agent.llm.client import LLMClient, Message, TokenUsage
@@ -38,6 +40,32 @@ log = logging.getLogger(__name__)
 
 # Compact at 75% of 1.05M context to leave room for current turn
 _COMPACT_THRESHOLD = 787500  # 75% of 1.05M
+
+
+# v1.0.1/D2: subprocess registry context variable. Tools that spawn
+# subprocesses can look up the current engine's registry via
+# get_current_subprocess_registry() and register their process so the
+# engine can terminate it on Ctrl+C. Scoped per-asyncio-task so
+# concurrent engines (e.g. in tests) don't collide.
+_current_subprocess_registry: contextvars.ContextVar[
+    "SubprocessRegistryProtocol | None"
+] = contextvars.ContextVar("_current_subprocess_registry", default=None)
+
+
+class SubprocessRegistryProtocol(Protocol):
+    """Minimal interface a subprocess registry must expose. In practice
+    this is ConversationEngine but tests and alternative runtimes can
+    provide their own."""
+    def register_subprocess(self, proc: Any) -> None: ...
+    def unregister_subprocess(self, proc: Any) -> None: ...
+
+
+def get_current_subprocess_registry() -> "SubprocessRegistryProtocol | None":
+    """Return the currently-active subprocess registry, or None if
+    called outside an engine's submit() scope. Tools use this to opt
+    into cancellable subprocess execution without having the engine
+    passed through every call."""
+    return _current_subprocess_registry.get()
 
 # v1.0.1/T2: lazy planner heuristic — action verbs trigger a plan pass,
 # read-only question words skip it. Kept as module-level frozen sets so
@@ -257,6 +285,12 @@ class ConversationEngine:
         # v1.0.1/T2: skip the planner pass on trivial read-only turns.
         # Set to False to restore v1.0.0's unconditional planner behavior.
         self.planner_lazy: bool = True
+        # v1.0.1/D2: subprocess registry. Tools that spawn subprocesses
+        # (run_godot, screenshot_scene) register them here so Ctrl+C can
+        # terminate the entire subprocess tree, not just the Python
+        # coroutine. Populated via register_subprocess / cleared on
+        # rollback_and_terminate or after tool completion.
+        self._active_subprocesses: set[Any] = set()
         self.active_skills: list[str] = []
         self.skill_mode: str = "auto"
         self.enabled_skills: list[str] = []
@@ -1049,10 +1083,18 @@ class ConversationEngine:
         self.last_user_input = user_input
         self.refresh_intent_profile(user_input)
         self._sync_registry_context()
-        await self._maybe_run_planner(user_input)
-        self.messages.append(Message.user(user_input))
-        self._emit_event("turn_started", user_input.splitlines()[0][:120], user_input=user_input)
-        return await self._run_loop(None, use_streaming=self.use_streaming)
+        # v1.0.1/D2: activate this engine as the subprocess registry so
+        # tools spawned during this turn can register their subprocesses
+        # for cancellation. The contextvar is reset in finally so
+        # subsequent engines/tests get a clean state.
+        registry_token = self._activate_subprocess_registry()
+        try:
+            await self._maybe_run_planner(user_input)
+            self.messages.append(Message.user(user_input))
+            self._emit_event("turn_started", user_input.splitlines()[0][:120], user_input=user_input)
+            return await self._run_loop(None, use_streaming=self.use_streaming)
+        finally:
+            self._deactivate_subprocess_registry(registry_token)
 
     def rollback_current_turn(self) -> int:
         """Drop any messages appended since the last submit() began.
@@ -1074,16 +1116,77 @@ class ConversationEngine:
         self._emit_event("turn_cancelled", f"turn cancelled, dropped {removed} messages")
         return removed
 
+    # ──────────────────────────────────────────────────────────────────
+    # v1.0.1/D2: subprocess registry API
+    # ──────────────────────────────────────────────────────────────────
+    def register_subprocess(self, proc: Any) -> None:
+        """Register a subprocess so the engine can terminate it on
+        cancellation. Tools call this after ``create_subprocess_exec``
+        and ``unregister_subprocess`` after ``communicate`` completes.
+        """
+        self._active_subprocesses.add(proc)
+
+    def unregister_subprocess(self, proc: Any) -> None:
+        """Remove a subprocess from the active set. Idempotent —
+        unregistering an already-removed process is a no-op."""
+        self._active_subprocesses.discard(proc)
+
+    async def terminate_active_subprocesses(self, timeout: float = 2.0) -> int:
+        """Terminate every registered subprocess that's still running.
+
+        Sends SIGTERM (via ``proc.terminate()``), waits up to ``timeout``
+        for graceful exit, then escalates to SIGKILL for any survivor.
+        Clears the registry after. Returns the number of processes that
+        were still running when this was called (i.e. the count that
+        required termination).
+        """
+        if not self._active_subprocesses:
+            return 0
+        running = [p for p in self._active_subprocesses if p.returncode is None]
+        for proc in running:
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                pass  # already gone
+        for proc in running:
+            if proc.returncode is not None:
+                continue
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except ProcessLookupError:
+                    pass
+        self._active_subprocesses.clear()
+        return len(running)
+
+    def _activate_subprocess_registry(self):
+        """Activate this engine as the current subprocess registry for
+        the duration of a submit() call. Returns a token that must be
+        passed to _deactivate_subprocess_registry to restore the prior
+        state (matching contextvars' set/reset API)."""
+        return _current_subprocess_registry.set(self)
+
+    def _deactivate_subprocess_registry(self, token) -> None:
+        _current_subprocess_registry.reset(token)
+
     async def submit_with_images(self, text: str, images_b64: list[str]) -> str:
         if not images_b64 and not _has_meaningful_text(text):
             return ""
         self.last_user_input = text
         self.refresh_intent_profile(text)
         self._sync_registry_context()
-        await self._maybe_run_planner(text)
-        self.messages.append(Message.user_with_images(text, images_b64))
-        self._emit_event("turn_started", text.splitlines()[0][:120], user_input=text, images=len(images_b64))
-        return await self._run_loop(None, use_streaming=self.use_streaming)
+        # v1.0.1/D2: activate subprocess registry for this turn (see submit)
+        registry_token = self._activate_subprocess_registry()
+        try:
+            await self._maybe_run_planner(text)
+            self.messages.append(Message.user_with_images(text, images_b64))
+            self._emit_event("turn_started", text.splitlines()[0][:120], user_input=text, images=len(images_b64))
+            return await self._run_loop(None, use_streaming=self.use_streaming)
+        finally:
+            self._deactivate_subprocess_registry(registry_token)
 
     def _check_auto_health(self) -> "ContextHealth":
         from godot_agent.runtime.context_health import ContextHealth

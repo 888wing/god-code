@@ -495,6 +495,220 @@ def test_engine_has_check_health():
     assert hasattr(ConversationEngine, '_check_auto_health')
 
 
+class TestSubprocessRegistry:
+    """Regression v1.0.1/D2: subprocess registry lets the engine terminate
+    any tool-spawned subprocess (godot validate, screenshot capture,
+    etc.) on Ctrl+C instead of leaving it running until natural
+    completion, wasting wall clock and API quota.
+    """
+
+    def _make_engine(self):
+        mock_client = AsyncMock(spec=LLMClient)
+        mock_client.chat = AsyncMock(return_value=_resp(Message.assistant(content="done")))
+        return ConversationEngine(
+            client=mock_client,
+            registry=ToolRegistry(),
+            system_prompt="t",
+        )
+
+    def test_engine_has_empty_subprocess_registry_initially(self):
+        engine = self._make_engine()
+        assert hasattr(engine, "_active_subprocesses")
+        assert len(engine._active_subprocesses) == 0
+
+    def test_register_and_unregister_subprocess(self):
+        """Registration adds the process to the active set; unregister
+        removes it. Idempotent: unregistering an already-removed process
+        is a no-op."""
+        engine = self._make_engine()
+
+        class FakeProc:
+            def __init__(self):
+                self.returncode = None
+                self.terminated = False
+                self.killed = False
+
+            def terminate(self):
+                self.terminated = True
+                self.returncode = -15
+
+            def kill(self):
+                self.killed = True
+                self.returncode = -9
+
+            async def wait(self):
+                return self.returncode
+
+        proc = FakeProc()
+        engine.register_subprocess(proc)
+        assert proc in engine._active_subprocesses
+
+        engine.unregister_subprocess(proc)
+        assert proc not in engine._active_subprocesses
+
+        # Idempotent
+        engine.unregister_subprocess(proc)
+
+    @pytest.mark.asyncio
+    async def test_terminate_active_subprocesses_kills_running_procs(self):
+        """terminate_active_subprocesses calls .terminate() on every
+        registered process that's still running, waits up to timeout,
+        then clears the registry."""
+        engine = self._make_engine()
+
+        class FakeProc:
+            def __init__(self, name):
+                self.name = name
+                self.returncode = None
+                self.terminated = False
+
+            def terminate(self):
+                self.terminated = True
+                self.returncode = -15
+
+            def kill(self):
+                self.returncode = -9
+
+            async def wait(self):
+                return self.returncode
+
+        proc1 = FakeProc("godot1")
+        proc2 = FakeProc("screenshot1")
+        engine.register_subprocess(proc1)
+        engine.register_subprocess(proc2)
+
+        killed = await engine.terminate_active_subprocesses()
+        assert killed == 2
+        assert proc1.terminated is True
+        assert proc2.terminated is True
+        assert len(engine._active_subprocesses) == 0
+
+    @pytest.mark.asyncio
+    async def test_terminate_skips_already_finished_procs(self):
+        """A subprocess that has already finished (returncode set) must
+        not be terminated — it's already done."""
+        engine = self._make_engine()
+
+        class FakeProc:
+            def __init__(self):
+                self.returncode = 0  # already done
+                self.terminated = False
+
+            def terminate(self):
+                self.terminated = True
+
+            async def wait(self):
+                return self.returncode
+
+        proc = FakeProc()
+        engine.register_subprocess(proc)
+
+        killed = await engine.terminate_active_subprocesses()
+        assert killed == 0
+        assert proc.terminated is False
+
+    @pytest.mark.asyncio
+    async def test_terminate_kills_stubborn_procs_after_timeout(self):
+        """If a subprocess doesn't respond to terminate() within timeout,
+        the engine escalates to kill()."""
+        engine = self._make_engine()
+
+        class StubbornProc:
+            def __init__(self):
+                self.returncode = None
+                self.terminate_called = False
+                self.kill_called = False
+
+            def terminate(self):
+                self.terminate_called = True
+                # doesn't actually set returncode — subprocess is ignoring SIGTERM
+
+            def kill(self):
+                self.kill_called = True
+                self.returncode = -9
+
+            async def wait(self):
+                if self.returncode is not None:
+                    return self.returncode
+                # Simulate a subprocess that never exits on terminate — raises
+                # asyncio.TimeoutError when wrapped in wait_for.
+                import asyncio
+                await asyncio.sleep(10)  # longer than the engine's timeout
+                return self.returncode
+
+        proc = StubbornProc()
+        engine.register_subprocess(proc)
+
+        killed = await engine.terminate_active_subprocesses(timeout=0.1)
+        assert killed == 1
+        assert proc.terminate_called is True
+        assert proc.kill_called is True
+
+    def test_subprocess_registry_accessible_via_contextvar(self):
+        """Tools should be able to access the active engine's subprocess
+        registry via a context variable, so they can register subprocesses
+        without the engine being explicitly threaded through every call."""
+        from godot_agent.runtime.engine import get_current_subprocess_registry
+        engine = self._make_engine()
+
+        # Outside the activation scope, registry is None
+        assert get_current_subprocess_registry() is None
+
+        # Inside, the current engine is accessible
+        token = engine._activate_subprocess_registry()
+        try:
+            assert get_current_subprocess_registry() is engine
+        finally:
+            engine._deactivate_subprocess_registry(token)
+
+        # After deactivation, registry is None again
+        assert get_current_subprocess_registry() is None
+
+    @pytest.mark.asyncio
+    async def test_registry_active_during_submit(self):
+        """During engine.submit(), the engine is the current registry.
+        After submit returns, registry is cleared back to None."""
+        from godot_agent.runtime.engine import get_current_subprocess_registry
+        engine = self._make_engine()
+
+        # Spy: check registry state during submit via a tool that captures it
+        registry_seen = {"value": None}
+
+        class SpyInput(BaseModel):
+            pass
+
+        class SpyOutput(BaseModel):
+            ok: bool = True
+
+        class SpyTool(BaseTool):
+            name = "spy"
+            description = "capture the registry"
+            Input = SpyInput
+            Output = SpyOutput
+
+            async def execute(self, input):
+                registry_seen["value"] = get_current_subprocess_registry()
+                return ToolResult(output=SpyOutput())
+
+        engine.registry.register(SpyTool())
+        engine.client.chat = AsyncMock(
+            side_effect=[
+                _resp(Message.assistant(
+                    tool_calls=[ToolCall(id="1", name="spy", arguments="{}")]
+                )),
+                _resp(Message.assistant(content="done")),
+            ]
+        )
+        await engine.submit("check registry")
+
+        assert registry_seen["value"] is engine, (
+            "tool should see the engine as the active subprocess registry"
+        )
+        assert get_current_subprocess_registry() is None, (
+            "registry should be cleared after submit returns"
+        )
+
+
 class TestLazyPlannerTriggering:
     """Regression v1.0.1/T2: planner must not run on trivial read-only
     requests. Skipping those turns saves the full planner cost (LLM call +

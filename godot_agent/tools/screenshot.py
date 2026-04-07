@@ -77,6 +77,12 @@ class ScreenshotTool(BaseTool):
                 )
                 Path(script_path).write_text(script)
 
+                # v1.0.1/D2: register with the active subprocess registry
+                # so Ctrl+C can terminate this Godot process instead of
+                # letting it run to natural completion (~10-30s typically).
+                from godot_agent.runtime.engine import get_current_subprocess_registry
+                registry = get_current_subprocess_registry()
+
                 proc = await asyncio.create_subprocess_exec(
                     resolved_godot_path,
                     *(["--headless"] if input.headless else []),
@@ -86,9 +92,15 @@ class ScreenshotTool(BaseTool):
                     stderr=asyncio.subprocess.PIPE,
                     cwd=str(project_path),
                 )
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=30
-                )
+                if registry is not None:
+                    registry.register_subprocess(proc)
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(), timeout=30
+                    )
+                finally:
+                    if registry is not None:
+                        registry.unregister_subprocess(proc)
                 if proc.returncode not in (0, None):
                     stderr_text = stderr.decode(errors="replace").strip()
                     stdout_text = stdout.decode(errors="replace").strip()

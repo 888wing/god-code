@@ -142,13 +142,25 @@ async def run_godot_command(
     project_path: str | Path,
     timeout: int = 120,
 ) -> GodotCommandResult:
+    # v1.0.1/D2: register with the active subprocess registry so the
+    # engine can SIGTERM this process on Ctrl+C instead of letting it run
+    # to natural completion (30-120s for typical Godot validate calls).
+    from godot_agent.runtime.engine import get_current_subprocess_registry
+    registry = get_current_subprocess_registry()
+
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=str(project_path),
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    if registry is not None:
+        registry.register_subprocess(proc)
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    finally:
+        if registry is not None:
+            registry.unregister_subprocess(proc)
     stdout_str = stdout.decode(errors="replace")
     stderr_str = stderr.decode(errors="replace")
     report = parse_godot_output(stdout_str + "\n" + stderr_str)
