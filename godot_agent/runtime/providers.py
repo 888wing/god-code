@@ -52,7 +52,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         provider="xai",
         name="xAI",
         base_url="https://api.x.ai/v1",
-        model="grok-4",
+        model="grok-4.20-0309-reasoning",
         key_url="https://console.x.ai",
     ),
     "glm": ProviderPreset(

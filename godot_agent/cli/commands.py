@@ -140,7 +140,7 @@ _PROVIDERS = {
     "5": {
         "provider": "xai",
         "name": "xAI",
-        "summary": "Grok models via xAI API",
+        "summary": "Grok 4.20, 2M context, vision, reasoning",
     },
     "6": {
         "provider": "glm",
