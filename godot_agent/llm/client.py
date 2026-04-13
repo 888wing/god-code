@@ -104,10 +104,13 @@ class LLMClient:
             ]
         msg = Message.assistant(content=choice.get("content"), tool_calls=tool_calls)
         usage_data = data.get("usage", {})
+        prompt_tokens = usage_data.get("prompt_tokens", 0) or usage_data.get("input_tokens", 0)
+        completion_tokens = usage_data.get("completion_tokens", 0) or usage_data.get("output_tokens", 0)
+        total_tokens = usage_data.get("total_tokens", 0) or (prompt_tokens + completion_tokens)
         usage = TokenUsage(
-            prompt_tokens=usage_data.get("prompt_tokens", 0),
-            completion_tokens=usage_data.get("completion_tokens", 0),
-            total_tokens=usage_data.get("total_tokens", 0),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
         )
         return ChatResponse(message=msg, usage=usage)
 

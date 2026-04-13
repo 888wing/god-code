@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Callable
 
 from godot_agent.llm.client import ChatResponse, LLMClient, Message, ToolCall, TokenUsage
 from godot_agent.llm.redact import redact_secrets
+
+log = logging.getLogger(__name__)
 
 
 async def stream_chat_with_callback(
@@ -105,14 +108,24 @@ async def _consume_sse_stream(
 
             chunk = json.loads(data_str)
 
-            # Usage info (comes in final chunk)
-            if "usage" in chunk and chunk["usage"]:
+            # Usage info (comes in final chunk).
+            # Guard against empty-dict ({}) which is falsy in Python,
+            # and handle providers that use input_tokens/output_tokens
+            # instead of prompt_tokens/completion_tokens (e.g. xAI).
+            if "usage" in chunk and chunk["usage"] is not None:
                 u = chunk["usage"]
-                usage = TokenUsage(
-                    prompt_tokens=u.get("prompt_tokens", 0),
-                    completion_tokens=u.get("completion_tokens", 0),
-                    total_tokens=u.get("total_tokens", 0),
-                )
+                if u:
+                    usage = TokenUsage(
+                        prompt_tokens=u.get("prompt_tokens", 0) or u.get("input_tokens", 0),
+                        completion_tokens=u.get("completion_tokens", 0) or u.get("output_tokens", 0),
+                        total_tokens=u.get("total_tokens", 0),
+                    )
+                    if not usage.total_tokens:
+                        usage = TokenUsage(
+                            prompt_tokens=usage.prompt_tokens,
+                            completion_tokens=usage.completion_tokens,
+                            total_tokens=usage.prompt_tokens + usage.completion_tokens,
+                        )
 
             if not chunk.get("choices"):
                 continue
@@ -151,6 +164,9 @@ async def _consume_sse_stream(
             ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
             for tc in sorted(tool_calls_acc.values(), key=lambda x: x["id"])
         ]
+
+    if usage.total_tokens == 0 and (content_parts or tool_calls_acc):
+        log.warning("Streaming response received but usage info was missing — token count will be 0")
 
     msg = Message.assistant(content=content, tool_calls=tool_calls)
     return ChatResponse(message=msg, usage=usage)

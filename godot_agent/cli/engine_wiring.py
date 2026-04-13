@@ -141,12 +141,19 @@ def _provider_auth_issue(provider: str, api_key: str = "", oauth_token: str | No
             return None
         return "OpenAI requires an API key or an OAuth login."
 
+    provider_name = preset.name if preset else normalized_provider
+
     if not api_key:
-        provider_name = preset.name if preset else normalized_provider
         return f"{provider_name} requires an API key."
 
     if preset and preset.key_prefix and not api_key.startswith(preset.key_prefix):
         return f"Current API key does not look like a {preset.name} key (expected prefix {preset.key_prefix})."
+
+    # Detect key that clearly belongs to a *different* provider (e.g. an
+    # OpenAI sk- key used after switching to xAI which has no prefix).
+    for other_key, other_preset in PROVIDER_PRESETS.items():
+        if other_key != normalized_provider and other_preset.key_prefix and api_key.startswith(other_preset.key_prefix):
+            return f"Current API key looks like a {other_preset.name} key, not {provider_name}."
 
     return None
 
